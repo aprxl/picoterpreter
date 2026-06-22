@@ -1,0 +1,2 @@
+cmake -S . -B bin -G "Ninja" -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake --build bin

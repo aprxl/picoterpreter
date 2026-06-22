@@ -1,0 +1,8 @@
+[
+{
+  "directory": "C:/Users/caiou/.dev/KCPSM6Simulator/bin",
+  "command": "clang++ -IC:/Users/caiou/.dev/KCPSM6Simulator/src -O0 -g -Xclang -gcodeview -std=c++23 -D_DEBUG -D_DLL -D_MT -Xclang --dependent-lib=msvcrtd -Wall -Wextra -std=c++23 -o CMakeFiles\\kcpsm6simulator.dir\\src\\main.cpp.obj -c C:\\Users\\caiou\\.dev\\KCPSM6Simulator\\src\\main.cpp",
+  "file": "C:/Users/caiou/.dev/KCPSM6Simulator/src/main.cpp",
+  "output": "C:/Users/caiou/.dev/KCPSM6Simulator/bin/CMakeFiles/kcpsm6simulator.dir/src/main.cpp.obj"
+}
+]
