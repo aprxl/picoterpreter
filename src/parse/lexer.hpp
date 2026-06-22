@@ -9,10 +9,8 @@
 
 namespace pico
 {
-
 class Lexer {
   using BufferIterator = std::string_view::iterator;
-
   static constexpr std::array<bool, 256> IDENTIFIER_VALID_FIRST = [] consteval {
     std::array<bool, 256> list{ };
     for (usize i = 0; i < 256; ++i) {
@@ -23,7 +21,6 @@ class Lexer {
     list['_'] = true;
     return list;
   }();
-
   static constexpr std::array<bool, 256> IDENTIFIER_VALID = [] consteval {
     std::array<bool, 256> list = IDENTIFIER_VALID_FIRST;
     for (usize i = 0; i < 256; ++i) {
@@ -37,7 +34,6 @@ class Lexer {
     list['@'] = true;
     return list;
   }();
-
   static constexpr std::array<bool, 256> NUMBER_VALID = [] consteval {
     std::array<bool, 256> list{ };
     for (usize i = 0; i < 256; ++i) {
@@ -47,7 +43,6 @@ class Lexer {
     }
     return list;
   }();
-
   static constexpr std::array<bool, 256> OPERATORS = [] consteval {
     std::array<bool, 256> list{ };
     list['\''] = true;
@@ -63,7 +58,6 @@ class Lexer {
     list['$'] = true;
     return list;
   }();
-
   static constexpr std::array<bool, 256> WHITESPACE = [] consteval {
     std::array<bool, 256> list{ };
     for (usize i = 0; i < 256; ++i) {
@@ -73,33 +67,26 @@ class Lexer {
     }
     return list;
   }();
-
 public:
   enum TokenKind : u8;
   enum class InstructionKind : u8;
   enum class FlagKind : u8;
   enum class NumberLiteralBase : u8;
-
   struct SourceSpan;
   struct Token;
   class Context;
-
   Lexer() = default;
-
   [[nodiscard]] auto path() const noexcept -> std::string_view { return path_; }
   [[nodiscard]] auto tokens() const noexcept -> const std::vector<Token> & { return tokens_; }
-
   /// Sets the file path.
   auto SetFilePath(const std::string_view& path) noexcept -> Lexer & {
     path_ = path;
     return *this;
   }
-
   /// Reads the file at the configured path and lexes it, reporting into `diag`.
   auto Run(Diagnostics& diag) -> bool;
   /// Lexes an in-memory source buffer, reporting into `diag`. The pure, I/O-free core.
   auto Tokenize(std::string_view source, Diagnostics& diag) -> bool;
-
 private:
   static auto TryIdentifier(Context& ctx) -> std::optional<Token>;
   static auto TryNarrowIdentifier(Context& ctx, Token& token) -> bool;
@@ -107,16 +94,12 @@ private:
   static auto TryNarrowIntoRegister(std::string_view lower, Token& token) -> bool;
   static auto TryNarrowIntoInstruction(std::string_view lower, Token& token) -> bool;
   static auto TryNarrowIntoRegisterBank(char c, Token& token) -> bool;
-
   static auto TryNumber(Context& ctx) -> std::optional<Token>;
   static auto TryOperator(Context& ctx) -> std::optional<Token>;
-
   auto AddToken(Token&& token) -> bool;
-
   /// Resolves some token groups into a single token.
   auto Resolve(Diagnostics& diag) -> bool;
   auto TryResolveNumber(usize index, Diagnostics& diag) -> bool;
-
   std::string_view path_;
   std::vector<Token> tokens_;
 };
@@ -130,7 +113,6 @@ enum Lexer::TokenKind : u8 {
   String,
   Flag,
   RegisterBank,
-
   /// Used in number base specifications: 'b, 'd; Upper/lower nibble specification: 'upper, 'lower
   SingleQuote,
   /// Used for character literals and string literals
@@ -229,7 +211,6 @@ struct Lexer::Token {
   TokenKind kind = Invalid;
   SourceSpan span{ };
   std::variant<u32, InstructionKind, FlagKind, std::string> value;
-
   template <typename T>
   T& value_as( ) { return std::get<T>(value); }
   template <typename T>
@@ -352,21 +333,16 @@ public:
     Default,
     RightAfterSingleQuote
   };
-
   Context(std::string_view source, std::string_view path, Diagnostics& diag) noexcept
     : contents_(source), path_(path), diag_(diag) {
     iterator_ = saved_ = line_start_ = contents_.begin( );
   }
-
   [[nodiscard]] auto state( ) const noexcept -> State { return state_; }
   auto state(const State state) noexcept -> void { state_ = state; }
-
   [[nodiscard]] auto diag( ) const noexcept -> Diagnostics& { return diag_; }
-
   [[nodiscard]] auto Current( ) const noexcept -> const BufferIterator& { return iterator_; }
   auto Next( ) noexcept -> void { ++iterator_; ++column_; }
   [[nodiscard]] auto Ended( ) const noexcept -> bool { return iterator_ == contents_.end( ); }
-
   /// Marks the start of a token. `SpanFromSaved` then describes the consumed range.
   auto Save( ) noexcept -> void {
     saved_ = iterator_;
@@ -374,7 +350,6 @@ public:
     saved_column_ = column_;
   }
   auto Restore( ) noexcept -> void { iterator_ = saved_; }
-
   [[nodiscard]] auto SpanFromSaved( ) const noexcept -> SourceSpan {
     return SourceSpan{
       .offset = static_cast<u32>(std::distance(contents_.begin( ), saved_)),
@@ -383,57 +358,46 @@ public:
       .length = static_cast<u16>(std::distance(saved_, iterator_)),
     };
   }
-
   [[nodiscard]] auto Is(const char c) const noexcept -> bool {
     if (Ended( )) { return false; }
     return *iterator_ == c;
   }
-
   [[nodiscard]] auto IsIdentifierFirstValid( ) const noexcept -> bool {
     if (Ended( )) { return false; }
     return IDENTIFIER_VALID_FIRST[*iterator_];
   }
-
   [[nodiscard]] auto IsIdentifierValid( ) const noexcept -> bool {
     if (Ended( )) { return false; }
     return IDENTIFIER_VALID[*iterator_];
   }
-
   [[nodiscard]] auto IsNumberValid( ) const noexcept -> bool {
     if (Ended( )) { return false; }
     return NUMBER_VALID[*iterator_];
   }
-
   [[nodiscard]] auto IsOperator( ) const noexcept -> bool {
     if (Ended( )) { return false; }
     return OPERATORS[*iterator_];
   }
-
   [[nodiscard]] auto IsWhitespace( ) const noexcept -> bool {
     if (Ended( )) { return false; }
     return WHITESPACE[*iterator_];
   }
-
   auto SkipWhitespace( ) noexcept -> void {
     while (!Ended( ) && IsWhitespace( )) {
       if (Is('\n')) {
         IncrementLine( );
       }
-
       Next( );
     }
   }
-
   auto IncrementLine( ) noexcept -> void {
     line_++;
     /// `Context::Next` will bump this to one, correctly.
     column_ = 0;
     line_start_ = iterator_ + 1;
   }
-
   [[nodiscard]] auto GetCurrentLine( ) const noexcept -> std::string_view;
   [[nodiscard]] auto GetSnippet( ) const noexcept -> Diagnostics::Snippet;
-
 private:
   std::string_view contents_;
   std::string_view path_;
@@ -443,7 +407,6 @@ private:
   BufferIterator iterator_, saved_, line_start_;
   State state_{ };
 };
-
 }
 
 REGISTER_FORMAT_OVERRIDE(pico::Lexer::TokenKind, "{}", [&] {
@@ -472,7 +435,9 @@ REGISTER_FORMAT_OVERRIDE(pico::Lexer::TokenKind, "{}", [&] {
 }())
 
 REGISTER_FORMAT_OVERRIDE(pico::Lexer::InstructionKind, "{}", pico::InstructionName(self))
+
 REGISTER_FORMAT_OVERRIDE(pico::Lexer::FlagKind, "{}", pico::FlagName(self))
+
 REGISTER_FORMAT_OVERRIDE(pico::Lexer::Token,
   "Token {{ Kind: {}, Value: {}, Span: {}:{} }}", self.kind, [&] {
   using namespace pico;
