@@ -17,7 +17,7 @@ auto PrintDiagnostic(const Diagnostics::Message& message) -> void {
 }
 
 auto PrintSnippet(const Diagnostics::Message& message) -> void {
-  const u8 line_str_size = std::log10(message.snippet->line) + 1;
+  const u8 line_str_size = static_cast<u8>(std::log10(message.snippet->line)) + 1;
   std::println(" ---> {}:{}:{}", message.snippet->file_name, message.snippet->line, message.snippet->column + 1);
   std::println("  {:>{}} |", "", line_str_size);
   std::println("  {} | {}", message.snippet->line, message.snippet->text);

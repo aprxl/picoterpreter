@@ -5,7 +5,7 @@
 
 namespace pico
 {
-namespace
+namespace detail
 {
 /// Converts a single hexadecimal digit to its value, or `nullopt` if `c` is not
 /// a hex digit.
@@ -77,10 +77,10 @@ auto StringToNumber(const std::string_view str,
   }
   return result;
 }
+} // namespace pico::detail
 
 constexpr usize IDENTIFIER_MIN_CAPACITY = 8_usize;
 constexpr usize NUMBER_MIN_CAPACITY = 3_usize;
-} // namespace
 
 auto Lexer::TryIdentifier(Context& ctx) -> std::optional<Token> {
   Token token{ };
@@ -128,7 +128,7 @@ auto Lexer::TryNarrowIdentifier(Context& ctx, Token& token) -> bool {
   }
 
   const auto& ident = token.value_as<std::string>( );
-  const std::string lower = StringToLower(ident);
+  const std::string lower = detail::StringToLower(ident);
   /// Each helper only mutates `token` when it matches, so short-circuiting keeps
   /// the first match and avoids the later helpers clobbering it.
   bool narrowed = TryNarrowIntoInstruction(lower, token)
@@ -167,7 +167,7 @@ auto Lexer::TryNarrowIntoFlag(const std::string_view lower, Token& token) -> boo
 auto Lexer::TryNarrowIntoRegister(const std::string_view lower, Token& token) -> bool {
   /// Registers are `s0`..`sf`: the letter `s` followed by a single hex nibble.
   if (lower.size( ) == 2 && lower[0] == 's') {
-    if (const auto nibble = CharToHexU8(lower[1])) {
+    if (const auto nibble = detail::CharToHexU8(lower[1])) {
       token.kind = Register;
       token.value = static_cast<u32>(*nibble);
       return true;
@@ -300,7 +300,7 @@ auto Lexer::TryResolveNumber(const usize index, Diagnostics& diag) -> bool {
   /// Copy the text out before we overwrite `token.value` with the parsed result;
   /// the string and the `u32` share the same variant storage.
   const std::string text = token.value_as<std::string>( );
-  const auto parsed = StringToNumber(text, base, diag);
+  const auto parsed = detail::StringToNumber(text, base, diag);
   if (!parsed) {
     diag.AddMessage(Diagnostics::Severity::Error,
       "Unable to parse number token '{}'.", text);
