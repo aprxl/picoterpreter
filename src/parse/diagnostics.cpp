@@ -1,5 +1,6 @@
 #include "diagnostics.hpp"
 #include <cassert>
+#include <cmath>
 
 namespace pico
 {

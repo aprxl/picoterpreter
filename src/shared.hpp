@@ -51,4 +51,10 @@ constexpr auto FNV1AHash(std::string_view str) -> usize {
 /// match against another project's to-dos.
 #define PICO_TODO(message) (void(0))
 
+#if defined(__clang__) or defined(__GNUC__)
+#define PICO_INLINE __attribute__((always_inline))
+#else
+#error "Only Clang and GCC are supported."
+#endif
+
 #endif

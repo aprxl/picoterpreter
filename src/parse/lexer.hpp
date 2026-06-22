@@ -55,7 +55,6 @@ class Lexer {
     list[']'] = true;
     list[','] = true;
     list[':'] = true;
-    list[';'] = true;
     list['%'] = true;
     list['#'] = true;
     list['$'] = true;
@@ -106,6 +105,7 @@ private:
   static auto TryNarrowIntoRegisterBank(char c, Token& token) -> bool;
   static auto TryNumber(Context& ctx) -> std::optional<Token>;
   static auto TryOperator(Context& ctx) -> std::optional<Token>;
+  static auto TryComment(Context& ctx) -> std::optional<Token>;
 
   auto AddToken(Token&& token) -> bool;
   /// Resolves some token groups into a single token.
@@ -118,6 +118,7 @@ private:
 
 enum Lexer::TokenKind : u8 {
   Invalid,
+  Skip,
   InstructionOrDirective,
   Identifier,
   Register,
@@ -139,8 +140,6 @@ enum Lexer::TokenKind : u8 {
   Comma,
   /// Labels
   Colon,
-  /// Comments
-  Semicolon,
   /// Environment variables
   Percent,
   /// String literals
@@ -356,9 +355,9 @@ public:
   auto state(const State state) noexcept -> void { state_ = state; }
 
   [[nodiscard]] auto diag( ) const noexcept -> Diagnostics& { return diag_; }
-  [[nodiscard]] auto Current( ) const noexcept -> const BufferIterator& { return iterator_; }
-  auto Next( ) noexcept -> void { ++iterator_; ++column_; }
-  [[nodiscard]] auto Ended( ) const noexcept -> bool { return iterator_ == contents_.end( ); }
+  [[nodiscard]] PICO_INLINE auto Current( ) const noexcept -> const BufferIterator& { return iterator_; }
+  PICO_INLINE auto Next( ) noexcept -> void { ++iterator_; ++column_; }
+  [[nodiscard]] PICO_INLINE auto Ended( ) const noexcept -> bool { return iterator_ == contents_.end( ); }
 
   /// Marks the start of a token. `SpanFromSaved` then describes the consumed range.
   auto Save( ) noexcept -> void {
@@ -455,7 +454,6 @@ REGISTER_FORMAT_OVERRIDE(pico::Lexer::TokenKind, "{}", [&] {
     case Lexer::Hashtag: return "Hashtag";
     case Lexer::Comma: return "Comma";
     case Lexer::Colon: return "Colon";
-    case Lexer::Semicolon: return "Semicolon";
     case Lexer::Percent: return "Percent";
     case Lexer::DollarSign: return "DollarSign";
     default: return "None";

@@ -240,7 +240,6 @@ auto Lexer::TryOperator(Context& ctx) -> std::optional<Token> {
     case '#': token.kind = Hashtag; break;
     case ',': token.kind = Comma; break;
     case ':': token.kind = Colon; break;
-    case ';': token.kind = Semicolon; break;
     case '%': token.kind = Percent; break;
     case '$': token.kind = DollarSign; break;
     default: token.kind = Invalid;
@@ -250,8 +249,23 @@ auto Lexer::TryOperator(Context& ctx) -> std::optional<Token> {
   return std::make_optional(std::move(token));
 }
 
+auto Lexer::TryComment(Context &ctx) -> std::optional<Token> {
+  if (!ctx.Is(';')) {
+    return { };
+  }
+  ctx.Next( );
+  while (!ctx.Ended( ) && !ctx.Is('\n')) {
+    ctx.Next( );
+  }
+  Token token;
+  token.kind = Skip;
+  return std::make_optional(std::move(token));
+}
+
 auto Lexer::AddToken(Token&& token) -> bool {
   const auto kind = token.kind;
+  if (kind == Skip)
+    return true;
   tokens_.emplace_back(std::move(token));
   /// A returned `Invalid` acts as a sentinel for badly lexed tokens.
   return kind != Invalid;
@@ -332,10 +346,11 @@ auto Lexer::Run(Diagnostics& diag) -> bool {
 }
 
 auto Lexer::Tokenize(const std::string_view source, Diagnostics& diag) -> bool {
-  static constexpr std::array<std::optional<Token>(*)(Context&), 3> MATCH_FN = {
+  static constexpr std::array<std::optional<Token>(*)(Context&), 4> MATCH_FN = {
     TryIdentifier,
     TryNumber,
-    TryOperator
+    TryOperator,
+    TryComment
   };
 
   Context ctx(source, path_, diag);
