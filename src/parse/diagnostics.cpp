@@ -36,6 +36,7 @@ auto Diagnostics::AddSnippetToLastMessage(Snippet&& snippet) -> void {
   if (messages_.empty( )) {
     return;
   }
+
   auto& back = messages_.back( );
   assert(!back.snippet.has_value( ) && "Attempted to override the snippet of a message.");
   back.snippet = std::forward<Snippet>(snippet);
