@@ -23,11 +23,9 @@ static const pico::Cli::Command dump_ast("Dumps all AST nodes.", 0,
 
 static const auto cli = [ ] {
   pico::Cli cli{};
-
   cli.AddCommand("lsp-mode", lsp_mode);
   cli.AddCommand("dump-tokens", dump_tokens);
   cli.AddCommand("dump-ast", dump_ast);
-
   return cli;
 }();
 

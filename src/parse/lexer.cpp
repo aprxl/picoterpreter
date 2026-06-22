@@ -31,36 +31,45 @@ auto StringToLower(const std::string_view str) -> std::string {
 
 /// Parses a digit string in the given base. Reports malformed digits / overflow
 /// of the per-base digit count into `diag` and returns `nullopt` on hard errors.
-auto StringToNumber(const std::string_view str, const Lexer::NumberLiteralBase base, Diagnostics& diag) -> std::optional<u32> {
+auto StringToNumber(const std::string_view str,
+  const Lexer::NumberLiteralBase base, Diagnostics& diag) -> std::optional<u32> {
   usize max_digits{ };
   u32 multiplier{ };
   std::string_view base_name;
   switch (base) {
-    case Lexer::NumberLiteralBase::Decimal:     max_digits = 3; multiplier = 10_u32; base_name = "Decimal";     break;
-    case Lexer::NumberLiteralBase::Binary:      max_digits = 8; multiplier = 2_u32;  base_name = "Binary";      break;
-    case Lexer::NumberLiteralBase::Hexadecimal: max_digits = 3; multiplier = 16_u32; base_name = "Hexadecimal"; break;
+    case Lexer::NumberLiteralBase::Decimal:
+      max_digits = 3; multiplier = 10_u32; base_name = "Decimal";     break;
+    case Lexer::NumberLiteralBase::Binary:
+      max_digits = 8; multiplier = 2_u32;  base_name = "Binary";      break;
+    case Lexer::NumberLiteralBase::Hexadecimal:
+      max_digits = 3; multiplier = 16_u32; base_name = "Hexadecimal"; break;
   }
+
   usize size = str.size( );
   if (size > max_digits) {
     diag.AddMessage(Diagnostics::Severity::Warning,
       "{} numbers may only have {} digits, got {}.", base_name, max_digits, size);
     size = max_digits;
   }
+
   u32 result{ };
   u32 power = 1;
   /// Iterate the number from least to most-significant.
   for (usize i = size; i-- > 0; ) {
     const auto value = CharToHexU8(str[i]);
     if (!value) {
-      diag.AddMessage(Diagnostics::Severity::Error, "Character '{}' is not a valid digit.", str[i]);
+      diag.AddMessage(Diagnostics::Severity::Error,
+        "Character '{}' is not a valid digit.", str[i]);
       return std::nullopt;
     }
     if (base == Lexer::NumberLiteralBase::Binary && *value > 1) {
-      diag.AddMessage(Diagnostics::Severity::Error, "Binary numbers may only contain 0 and 1 digits, got '{}'.", *value);
+      diag.AddMessage(Diagnostics::Severity::Error,
+        "Binary numbers may only contain 0 and 1 digits, got '{}'.", *value);
       return std::nullopt;
     }
     if (base == Lexer::NumberLiteralBase::Decimal && *value > 9) {
-      diag.AddMessage(Diagnostics::Severity::Error, "Decimal numbers may only contain 0...9 digits, got '{}'.", str[i]);
+      diag.AddMessage(Diagnostics::Severity::Error,
+        "Decimal numbers may only contain 0...9 digits, got '{}'.", str[i]);
       return std::nullopt;
     }
     result += *value * power;
@@ -79,6 +88,7 @@ auto Lexer::TryIdentifier(Context& ctx) -> std::optional<Token> {
   if (!ctx.IsIdentifierFirstValid( )) {
     return { };
   }
+
   bool has_only_hex_characters = true;
   std::string identifier{ };
   identifier.reserve(IDENTIFIER_MIN_CAPACITY);
@@ -89,6 +99,7 @@ auto Lexer::TryIdentifier(Context& ctx) -> std::optional<Token> {
     identifier += *ctx.Current( );
     ctx.Next( );
   }
+
   const bool looks_like_hex_literal =
     has_only_hex_characters && identifier.size( ) > 1 && identifier.size( ) <= 3;
   token.value = std::move(identifier);
@@ -101,6 +112,7 @@ auto Lexer::TryIdentifier(Context& ctx) -> std::optional<Token> {
     token.kind = Invalid;
     return std::make_optional(std::move(token));
   }
+
   /// If it stayed a plain identifier yet is composed solely of hex digits (e.g. `ab`),
   /// it's really a number: defer to `TryNumber`. Keywords that happen to be hex
   /// (e.g. `add`) have already been narrowed above, so they are kept as-is.
@@ -114,6 +126,7 @@ auto Lexer::TryNarrowIdentifier(Context& ctx, Token& token) -> bool {
   if (token.kind != Identifier) {
     return false;
   }
+
   const auto& ident = token.value_as<std::string>( );
   const std::string lower = StringToLower(ident);
   /// Each helper only mutates `token` when it matches, so short-circuiting keeps
@@ -121,12 +134,14 @@ auto Lexer::TryNarrowIdentifier(Context& ctx, Token& token) -> bool {
   bool narrowed = TryNarrowIntoInstruction(lower, token)
                || TryNarrowIntoRegister(lower, token)
                || TryNarrowIntoFlag(lower, token);
+
   /// A `RegisterBank` token is a single character (`a`/`b`), and cannot follow a
   /// single quote. Checking the length keeps instructions like `add` from
   /// being narrowed into register bank A.
   if (!narrowed && ctx.state( ) != Context::State::RightAfterSingleQuote && ident.size( ) == 1) {
     narrowed = TryNarrowIntoRegisterBank(ident.at(0), token);
   }
+
   ctx.state(Context::State::Default);
   /// If it wasn't narrowed, then we still have an identifier. So let's make sure
   /// that it is a valid one.
@@ -174,16 +189,19 @@ auto Lexer::TryNumber(Context& ctx) -> std::optional<Token> {
   if (!ctx.IsNumberValid( )) {
     return { };
   }
+
   std::string number{ };
   number.reserve(NUMBER_MIN_CAPACITY);
   while (ctx.IsNumberValid( )) {
     number += *ctx.Current( );
     ctx.Next( );
   }
+
   Token token;
   token.kind = Number;
-  /// Because of the way base specifies work in Picoblaze, we can't convert this number into an actual number
-  /// just yet. We instead do a second pass over all found tokens and, in that pass, we compute the desired value.
+  /// Because of the way base specifies work in Picoblaze, we can't convert this number
+  /// into an actual number just yet. We instead do a second pass over all found tokens and,
+  /// in that pass, we compute the desired value.
   token.value = std::move(number);
   return std::make_optional(std::move(token));
 }
@@ -194,6 +212,7 @@ auto Lexer::TryNarrowIntoRegisterBank(const char c, Token& token) -> bool {
     token.value = 0_u32;
     return true;
   }
+
   if (c == 'B' || c == 'b') {
     token.kind = RegisterBank;
     token.value = 1_u32;
@@ -206,6 +225,7 @@ auto Lexer::TryOperator(Context& ctx) -> std::optional<Token> {
   if (!ctx.IsOperator( )) {
     return { };
   }
+
   Token token;
   switch (*ctx.Current( )) {
     case '\'':
@@ -225,6 +245,7 @@ auto Lexer::TryOperator(Context& ctx) -> std::optional<Token> {
     case '$': token.kind = DollarSign; break;
     default: token.kind = Invalid;
   }
+
   ctx.Next( );
   return std::make_optional(std::move(token));
 }
@@ -250,12 +271,17 @@ auto Lexer::Resolve(Diagnostics& diag) -> bool {
 auto Lexer::TryResolveNumber(const usize index, Diagnostics& diag) -> bool {
   auto base = NumberLiteralBase::Hexadecimal;
   /// Check if have a base specifier after the number. If so, update accordingly.
-  if (tokens_.size( ) > index + 2 && tokens_.at(index + 1).kind == SingleQuote && tokens_.at(index + 2).kind == Identifier) {
-    const auto& base_specifier = tokens_.at(index + 2).value_as<std::string>( );
+  if (tokens_.size( ) > index + 2
+      && tokens_.at(index + 1).kind == SingleQuote
+      && tokens_.at(index + 2).kind == Identifier) {
+    const auto& base_specifier =
+      tokens_.at(index + 2).value_as<std::string>( );
     if (base_specifier.size( ) > 1) {
-      diag.AddMessage(Diagnostics::Severity::Error, "Invalid base specifier '{}'.", base_specifier);
+      diag.AddMessage(Diagnostics::Severity::Error,
+        "Invalid base specifier '{}'.", base_specifier);
       return false;
     }
+
     switch (base_specifier.at(0)) {
       case 'd': base = NumberLiteralBase::Decimal; break;
       case 'b': base = NumberLiteralBase::Binary; break;
@@ -264,25 +290,31 @@ auto Lexer::TryResolveNumber(const usize index, Diagnostics& diag) -> bool {
           "Unknown base specifier '{}', expected 'd' or 'b'.", base_specifier);
         return false;
     }
+
     /// Remove both the single quote and the base specifier.
     tokens_.erase(tokens_.begin( ) + static_cast<ptrdiff_t>(index) + 1,
       tokens_.begin( ) + static_cast<ptrdiff_t>(index) + 3);
   }
+
   auto& token = tokens_.at(index);
   /// Copy the text out before we overwrite `token.value` with the parsed result;
   /// the string and the `u32` share the same variant storage.
   const std::string text = token.value_as<std::string>( );
   const auto parsed = StringToNumber(text, base, diag);
   if (!parsed) {
-    diag.AddMessage(Diagnostics::Severity::Error, "Unable to parse number token '{}'.", text);
+    diag.AddMessage(Diagnostics::Severity::Error,
+      "Unable to parse number token '{}'.", text);
     return false;
   }
+
   u32 value = *parsed;
   /// The maximum numeric literal supported in Picoblaze is 0x3FF.
   if (value > 0x3ff_u32) {
-    diag.AddMessage(Diagnostics::Severity::Warning, "Number literal '{}' exceeds limit of 3FF, truncating...", text);
+    diag.AddMessage(Diagnostics::Severity::Warning,
+      "Number literal '{}' exceeds limit of 3FF, truncating...", text);
     value = 0x3ff_u32;
   }
+
   token.value.emplace<u32>(value);
   return true;
 }
@@ -294,6 +326,7 @@ auto Lexer::Run(Diagnostics& diag) -> bool {
     diag.AddMessage(Diagnostics::Severity::Error, "Could not open file '{}'.", path_);
     return false;
   }
+
   const std::string contents(std::istreambuf_iterator(file), {});
   return Tokenize(contents, diag);
 }
@@ -304,6 +337,7 @@ auto Lexer::Tokenize(const std::string_view source, Diagnostics& diag) -> bool {
     TryNumber,
     TryOperator
   };
+
   Context ctx(source, path_, diag);
   /// In case we are reusing this Lexer instance.
   tokens_.clear( );
@@ -313,6 +347,7 @@ auto Lexer::Tokenize(const std::string_view source, Diagnostics& diag) -> bool {
     if (ctx.Ended( )) {
       break;
     }
+
     ctx.Save( );
     bool found{ };
     for (const auto& fn : MATCH_FN) {
@@ -323,6 +358,7 @@ auto Lexer::Tokenize(const std::string_view source, Diagnostics& diag) -> bool {
       }
       ctx.Restore( );
     }
+
     if (!found) {
       if (!diag.DoesLastHaveSnippet( )) {
         diag.AddSnippetToLastMessage(ctx.GetSnippet( ));
