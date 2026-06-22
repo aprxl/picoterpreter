@@ -11,7 +11,7 @@ namespace pico
 {
 class Lexer {
   using BufferIterator = std::string_view::iterator;
-  static constexpr std::array<bool, 256> IDENTIFIER_VALID_FIRST = [] consteval {
+  static constexpr auto IDENTIFIER_VALID_FIRST = [] consteval {
     std::array<bool, 256> list{ };
     for (usize i = 0; i < 256; ++i) {
       if ((i >= 'a' && i <= 'z') || (i >= 'A' && i <= 'Z')) {
@@ -22,7 +22,7 @@ class Lexer {
     return list;
   }();
 
-  static constexpr std::array<bool, 256> IDENTIFIER_VALID = [] consteval {
+  static constexpr auto IDENTIFIER_VALID = [] consteval {
     std::array<bool, 256> list = IDENTIFIER_VALID_FIRST;
     for (usize i = 0; i < 256; ++i) {
       if (i >= '0' && i <= '9') {
@@ -36,7 +36,7 @@ class Lexer {
     return list;
   }();
 
-  static constexpr std::array<bool, 256> NUMBER_VALID = [] consteval {
+  static constexpr auto NUMBER_VALID = [] consteval {
     std::array<bool, 256> list{ };
     for (usize i = 0; i < 256; ++i) {
       if ((i >= '0' && i <= '9') || (i >= 'A' && i <= 'F') || (i >= 'a' && i <= 'f')) {
@@ -46,7 +46,7 @@ class Lexer {
     return list;
   }();
 
-  static constexpr std::array<bool, 256> OPERATORS = [] consteval {
+  static constexpr auto OPERATORS = [] consteval {
     std::array<bool, 256> list{ };
     list['\''] = true;
     list['\"'] = true;
@@ -61,7 +61,7 @@ class Lexer {
     return list;
   }();
 
-  static constexpr std::array<bool, 256> WHITESPACE = [] consteval {
+  static constexpr auto WHITESPACE = [] consteval {
     std::array<bool, 256> list{ };
     for (usize i = 0; i < 256; ++i) {
       if (i == ' ' || i == '\t' || i == '\n' || i == '\r') {
@@ -108,9 +108,21 @@ private:
   static auto TryComment(Context& ctx) -> std::optional<Token>;
 
   auto AddToken(Token&& token) -> bool;
-  /// Resolves some token groups into a single token.
+  /// Second pass that folds multi-token groups (numbers, tables) into resolved values
+  /// and drops the syntactic leftovers. Dispatches over the `TryResolve*` methods below.
   auto Resolve(Diagnostics& diag) -> bool;
-  auto TryResolveNumber(usize index, Diagnostics& diag) -> bool;
+  /// Each resolver inspects the group starting at `index`, resolves it in place, marks
+  /// any folded-away tokens `Skip`, and returns the number of tokens it consumed (>= 1).
+  auto TryResolveNumber(usize index, Diagnostics& diag) -> std::optional<usize>;
+  auto TryResolveTable(usize index, Diagnostics& diag) -> std::optional<usize>;
+  /// Parses a `Number` token's text into its `u32` value, truncating at 0x3FF with a
+  /// warning. Returns `false` only on an unparseable literal.
+  static auto ResolveNumberToken(Token& token, NumberLiteralBase base, Diagnostics& diag) -> bool;
+  /// Consumes an optional `'d`/`'b` base specifier at `index`, marking both tokens `Skip`
+  /// and setting `base`. Returns 0 (no specifier, defaults to hex), 2 (consumed), or
+  /// `nullopt`.
+  auto TryConsumeBaseSpecifier(usize index, NumberLiteralBase& base, Diagnostics& diag)
+    -> std::optional<usize>;
 
   std::string_view path_;
   std::vector<Token> tokens_;
