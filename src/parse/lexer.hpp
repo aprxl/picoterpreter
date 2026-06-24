@@ -106,6 +106,8 @@ private:
   static auto TryNumber(Context& ctx) -> std::optional<Token>;
   static auto TryOperator(Context& ctx) -> std::optional<Token>;
   static auto TryComment(Context& ctx) -> std::optional<Token>;
+  static auto TryString(Context& ctx) -> std::optional<Token>;
+  static auto TryNarrowIntoChar(std::string_view lower, Token& token) -> bool;
 
   auto AddToken(Token&& token) -> bool;
   /// Second pass that folds multi-token groups (numbers, tables) into resolved values
@@ -135,13 +137,12 @@ enum Lexer::TokenKind : u8 {
   Identifier,
   Register,
   Number,
+  Char,
   String,
   Flag,
   RegisterBank,
   /// Used in number base specifications: 'b, 'd; Upper/lower nibble specification: 'upper, 'lower
   SingleQuote,
-  /// Used for character literals and string literals
-  DoubleQuote,
   /// Bitwise not operator
   Tilda,
   /// Tables
@@ -159,7 +160,7 @@ enum Lexer::TokenKind : u8 {
 };
 
 enum class Lexer::InstructionKind : u8 {
-  Nop,
+  Nop = 0,
   Address,
   Add,
   AddCarry,
@@ -205,7 +206,9 @@ enum class Lexer::InstructionKind : u8 {
   TableDefinition,
   Test,
   TestCarry,
-  Xor
+  Xor,
+  /// Used to retrieve the amount of elements in this enum.
+  Maximum
 };
 
 enum class Lexer::FlagKind : u8 {
@@ -233,6 +236,7 @@ struct Lexer::SourceSpan {
 struct Lexer::Token {
   TokenKind kind = Invalid;
   SourceSpan span{ };
+  PICO_TODO("Intern strings to get rid of the std::string here.");
   std::variant<u32, InstructionKind, FlagKind, std::string> value;
 
   template <typename T>
@@ -456,10 +460,10 @@ REGISTER_FORMAT_OVERRIDE(pico::Lexer::TokenKind, "{}", [&] {
     case Lexer::Register: return "Register";
     case Lexer::Number: return "Number";
     case Lexer::String: return "String";
+    case Lexer::Char: return "Char";
     case Lexer::Flag: return "Flag";
     case Lexer::RegisterBank: return "RegisterBank";
     case Lexer::SingleQuote: return "SingleQuote";
-    case Lexer::DoubleQuote: return "DoubleQuote";
     case Lexer::Tilda: return "Tilda";
     case Lexer::BracketLeft: return "BracketLeft";
     case Lexer::BracketRight: return "BracketRight";
@@ -484,6 +488,7 @@ REGISTER_FORMAT_OVERRIDE(pico::Lexer::Token,
       return std::format("{}", self.value_as<Lexer::InstructionKind>());
     case Lexer::Flag:
       return std::format("{}", self.value_as<Lexer::FlagKind>());
+    case Lexer::Char:
     case Lexer::Number:
     case Lexer::Register:
     case Lexer::RegisterBank:

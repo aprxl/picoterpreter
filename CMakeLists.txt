@@ -14,5 +14,5 @@ add_executable(picoterpret
         src/parse/diagnostics.cpp
 )
 
-target_include_directories(picoterpret PRIVATE src)
+target_include_directories(picoterpret PRIVATE src includes)
 target_compile_options(picoterpret PRIVATE -Wall -Wextra -std=c++23)

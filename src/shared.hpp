@@ -1,8 +1,6 @@
 #ifndef SHARED_HH
 #define SHARED_HH
 
-
-
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -49,7 +47,7 @@ constexpr auto FNV1AHash(std::string_view str) -> usize {
 
 /// Inlined to-do message. Allows for quick searching that will not accidentally
 /// match against another project's to-dos.
-#define PICO_TODO(message) (void(0))
+#define PICO_TODO(message)
 
 #if defined(__clang__) or defined(__GNUC__)
 #define PICO_INLINE __attribute__((always_inline))

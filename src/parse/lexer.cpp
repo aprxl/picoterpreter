@@ -81,6 +81,7 @@ auto StringToNumber(const std::string_view str,
 
 constexpr usize IDENTIFIER_MIN_CAPACITY = 8_usize;
 constexpr usize NUMBER_MIN_CAPACITY = 3_usize;
+constexpr usize STRING_MIN_CAPACITY = 8_usize;
 
 auto Lexer::TryIdentifier(Context& ctx) -> std::optional<Token> {
   Token token{ };
@@ -233,7 +234,6 @@ auto Lexer::TryOperator(Context& ctx) -> std::optional<Token> {
       /// Disambiguate the lexing of `'b` so `b` doesn't get parsed as a `RegisterBank`
       ctx.state(Context::State::RightAfterSingleQuote);
       break;
-    case '\"': token.kind = DoubleQuote; break;
     case '~': token.kind = Tilda; break;
     case '[': token.kind = BracketLeft; break;
     case ']': token.kind = BracketRight; break;
@@ -260,6 +260,50 @@ auto Lexer::TryComment(Context &ctx) -> std::optional<Token> {
   Token token;
   token.kind = Skip;
   return std::make_optional(std::move(token));
+}
+
+auto Lexer::TryString(Context& ctx) -> std::optional<Token> {
+  if (!ctx.Is('\"')) {
+    return { };
+  }
+
+  Token token;
+  token.kind = String;
+  std::string string{ };
+  string.reserve(STRING_MIN_CAPACITY);
+  ctx.Next( );
+  while (!ctx.Ended( ) && !ctx.Is('\"') && !ctx.Is('\n') && !ctx.Is('\r')) {
+    string += *ctx.Current( );
+    ctx.Next( );
+  }
+
+  if (ctx.Ended( ) || !ctx.Is('\"')) {
+    ctx.diag( ).AddMessage(Diagnostics::Severity::Error,
+      "String doesn't have an ending double quotes or has a newline character in it.");
+    return { };
+  }
+  ctx.Next( );
+
+  if (string.empty( )) {
+    ctx.diag( ).AddMessage(Diagnostics::Severity::Error, "String cannot be empty.");
+    return { };
+  }
+  /// Strings and characters in Picoblaze both use double quotes in their definition, so we
+  /// check if we got a character or a string literal here.
+  if (TryNarrowIntoChar(string, token)) {
+    return std::make_optional(std::move(token));
+  }
+
+  token.value = std::move(string);
+  return std::make_optional(std::move(token));
+}
+
+auto Lexer::TryNarrowIntoChar(std::string_view lower, Token& token) -> bool {
+  if (lower.size( ) > 1)
+    return false;
+  token.kind = Char;
+  token.value.emplace<u32>(lower.at(0));
+  return true;
 }
 
 auto Lexer::AddToken(Token&& token) -> bool {
@@ -420,11 +464,12 @@ auto Lexer::Run(Diagnostics& diag) -> bool {
 }
 
 auto Lexer::Tokenize(const std::string_view source, Diagnostics& diag) -> bool {
-  static constexpr std::array<std::optional<Token>(*)(Context&), 4> MATCH_FN = {
+  static constexpr std::array<std::optional<Token>(*)(Context&), 5> MATCH_FN = {
     TryIdentifier,
     TryNumber,
+    TryString,
     TryOperator,
-    TryComment
+    TryComment,
   };
 
   Context ctx(source, path_, diag);
