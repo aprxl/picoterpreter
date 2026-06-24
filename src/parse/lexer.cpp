@@ -29,10 +29,43 @@ auto StringToLower(const std::string_view str) -> std::string {
   return result;
 }
 
+/// Builds a diagnostic snippet for `span` by extracting the full source line that
+/// contains its start offset.
+auto BuildSnippet(const std::string_view source, const std::string_view path,
+  const Lexer::SourceSpan& span) -> Diagnostics::Snippet {
+  const usize offset = std::min<usize>(span.offset, source.size( ));
+  const usize prev_newline = (offset == 0) ? std::string_view::npos
+                                           : source.rfind('\n', offset - 1);
+  const usize line_begin = (prev_newline == std::string_view::npos) ? 0 : prev_newline + 1;
+  usize line_end = source.find('\n', offset);
+  if (line_end == std::string_view::npos) {
+    line_end = source.size( );
+  }
+  std::string_view line = source.substr(line_begin, line_end - line_begin);
+  /// Drop a trailing carriage return so Windows line endings don't skew the caret.
+  if (!line.empty( ) && line.back( ) == '\r') {
+    line.remove_suffix(1);
+  }
+  Diagnostics::Snippet snippet;
+  snippet.line = span.line;
+  snippet.column = (span.column > 0) ? static_cast<u16>(span.column - 1) : 0;
+  snippet.file_name = std::string(path);
+  snippet.text = std::string(line);
+  return snippet;
+}
+
 /// Parses a digit string in the given base. Reports malformed digits / overflow
-/// of the per-base digit count into `diag` and returns `nullopt` on hard errors.
-auto StringToNumber(const std::string_view str,
-  const Lexer::NumberLiteralBase base, Diagnostics& diag) -> std::optional<u32> {
+/// of the per-base digit count into `diag` (located at `span`) and returns `nullopt`
+/// on hard errors.
+auto StringToNumber(const std::string_view str, const Lexer::NumberLiteralBase base,
+  const std::string_view source, const std::string_view path,
+  const Lexer::SourceSpan& span, Diagnostics& diag) -> std::optional<u32> {
+  /// Built once, only if a diagnostic actually fires, to avoid a per-number allocation.
+  std::optional<Diagnostics::Snippet> cached;
+  auto snippet = [&]( ) -> Diagnostics::Snippet& {
+    if (!cached) { cached = BuildSnippet(source, path, span); }
+    return *cached;
+  };
   usize max_digits{ };
   u32 multiplier{ };
   std::string_view base_name;
@@ -47,7 +80,7 @@ auto StringToNumber(const std::string_view str,
 
   usize size = str.size( );
   if (size > max_digits) {
-    diag.AddMessage(Diagnostics::Severity::Warning,
+    diag.AddMessage(Diagnostics::Severity::Warning, snippet( ),
       "{} numbers may only have {} digits, got {}.", base_name, max_digits, size);
     size = max_digits;
   }
@@ -58,17 +91,17 @@ auto StringToNumber(const std::string_view str,
   for (usize i = size; i-- > 0; ) {
     const auto value = CharToHexU8(str[i]);
     if (!value) {
-      diag.AddMessage(Diagnostics::Severity::Error,
+      diag.AddMessage(Diagnostics::Severity::Error, snippet( ),
         "Character '{}' is not a valid digit.", str[i]);
       return std::nullopt;
     }
     if (base == Lexer::NumberLiteralBase::Binary && *value > 1) {
-      diag.AddMessage(Diagnostics::Severity::Error,
+      diag.AddMessage(Diagnostics::Severity::Error, snippet( ),
         "Binary numbers may only contain 0 and 1 digits, got '{}'.", *value);
       return std::nullopt;
     }
     if (base == Lexer::NumberLiteralBase::Decimal && *value > 9) {
-      diag.AddMessage(Diagnostics::Severity::Error,
+      diag.AddMessage(Diagnostics::Severity::Error, snippet( ),
         "Decimal numbers may only contain 0...9 digits, got '{}'.", str[i]);
       return std::nullopt;
     }
@@ -149,7 +182,8 @@ auto Lexer::TryNarrowIdentifier(Context& ctx, Token& token) -> bool {
   if (!narrowed && (ident.find('*') != std::string::npos
                  || ident.find('&') != std::string::npos
                  || ident.find('@') != std::string::npos)) {
-    ctx.diag( ).AddMessage(Diagnostics::Severity::Error,
+    auto snippet = ctx.SnippetFromSaved( );
+    ctx.diag( ).AddMessage(Diagnostics::Severity::Error, snippet,
       "Identifier '{}' contains characters reserved for instructions.", ident);
     return false;
   }
@@ -278,14 +312,16 @@ auto Lexer::TryString(Context& ctx) -> std::optional<Token> {
   }
 
   if (ctx.Ended( ) || !ctx.Is('\"')) {
-    ctx.diag( ).AddMessage(Diagnostics::Severity::Error,
+    auto snippet = ctx.SnippetFromSaved( );
+    ctx.diag( ).AddMessage(Diagnostics::Severity::Error, snippet,
       "String doesn't have an ending double quotes or has a newline character in it.");
     return { };
   }
   ctx.Next( );
 
   if (string.empty( )) {
-    ctx.diag( ).AddMessage(Diagnostics::Severity::Error, "String cannot be empty.");
+    auto snippet = ctx.SnippetFromSaved( );
+    ctx.diag( ).AddMessage(Diagnostics::Severity::Error, snippet, "String cannot be empty.");
     return { };
   }
   /// Strings and characters in Picoblaze both use double quotes in their definition, so we
@@ -362,7 +398,8 @@ auto Lexer::TryConsumeBaseSpecifier(const usize index, NumberLiteralBase& base,
 
   const auto& base_specifier = tokens_.at(index + 1).value_as<std::string>( );
   if (base_specifier.size( ) > 1) {
-    diag.AddMessage(Diagnostics::Severity::Error,
+    auto snippet = detail::BuildSnippet(source_, path_, tokens_.at(index + 1).span);
+    diag.AddMessage(Diagnostics::Severity::Error, snippet,
       "Invalid base specifier '{}'.", base_specifier);
     return std::nullopt;
   }
@@ -370,10 +407,12 @@ auto Lexer::TryConsumeBaseSpecifier(const usize index, NumberLiteralBase& base,
   switch (base_specifier.at(0)) {
     case 'd': base = NumberLiteralBase::Decimal; break;
     case 'b': base = NumberLiteralBase::Binary; break;
-    default:
-      diag.AddMessage(Diagnostics::Severity::Error,
+    default: {
+      auto snippet = detail::BuildSnippet(source_, path_, tokens_.at(index + 1).span);
+      diag.AddMessage(Diagnostics::Severity::Error, snippet,
         "Unknown base specifier '{}', expected 'd' or 'b'.", base_specifier);
       return std::nullopt;
+    }
   }
 
   tokens_.at(index).kind = Skip;
@@ -385,10 +424,12 @@ auto Lexer::ResolveNumberToken(Token& token, const NumberLiteralBase base,
   Diagnostics& diag) -> bool {
   /// Copy the text out before we overwrite `token.value` with the parsed result;
   /// the string and the `u32` share the same variant storage.
+  const SourceSpan span = token.span;
   const std::string text = token.value_as<std::string>( );
-  const auto parsed = detail::StringToNumber(text, base, diag);
+  const auto parsed = detail::StringToNumber(text, base, source_, path_, span, diag);
   if (!parsed) {
-    diag.AddMessage(Diagnostics::Severity::Error,
+    auto snippet = detail::BuildSnippet(source_, path_, span);
+    diag.AddMessage(Diagnostics::Severity::Error, snippet,
       "Unable to parse number token '{}'.", text);
     return false;
   }
@@ -396,7 +437,8 @@ auto Lexer::ResolveNumberToken(Token& token, const NumberLiteralBase base,
   u32 value = *parsed;
   /// The maximum numeric literal supported in Picoblaze is 0x3FF.
   if (value > 0x3ff_u32) {
-    diag.AddMessage(Diagnostics::Severity::Warning,
+    auto snippet = detail::BuildSnippet(source_, path_, span);
+    diag.AddMessage(Diagnostics::Severity::Warning, snippet,
       "Number literal '{}' exceeds limit of 3FF, truncating...", text);
     value = 0x3ff_u32;
   }
@@ -427,7 +469,8 @@ auto Lexer::TryResolveTable(const usize index, Diagnostics& diag) -> std::option
     ++close;
   }
   if (close >= tokens_.size( )) {
-    diag.AddMessage(Diagnostics::Severity::Error,
+    auto snippet = detail::BuildSnippet(source_, path_, tokens_.at(index).span);
+    diag.AddMessage(Diagnostics::Severity::Error, snippet,
       "Unterminated table, expected ']'.");
     return std::nullopt;
   }
@@ -473,6 +516,8 @@ auto Lexer::Tokenize(const std::string_view source, Diagnostics& diag) -> bool {
   };
 
   Context ctx(source, path_, diag);
+  /// Kept so the resolve pass can build located diagnostics from token spans.
+  source_ = source;
   /// In case we are reusing this Lexer instance.
   tokens_.clear( );
   while (!ctx.Ended( )) {
@@ -483,6 +528,7 @@ auto Lexer::Tokenize(const std::string_view source, Diagnostics& diag) -> bool {
     }
 
     ctx.Save( );
+    const usize messages_before = diag.messages( ).size( );
     bool found{ };
     for (const auto& fn : MATCH_FN) {
       if (auto token = fn(ctx); token.has_value( )) {
@@ -494,10 +540,13 @@ auto Lexer::Tokenize(const std::string_view source, Diagnostics& diag) -> bool {
     }
 
     if (!found) {
-      if (!diag.DoesLastHaveSnippet( )) {
-        diag.AddSnippetToLastMessage(ctx.GetSnippet( ));
+      /// A matcher that recognized but rejected the token already reported a located
+      /// error. If nothing did, the character itself is unexpected: report it here.
+      if (diag.messages( ).size( ) == messages_before) {
+        auto snippet = ctx.GetSnippet( );
+        diag.AddMessage(Diagnostics::Severity::Error, snippet,
+          "Unexpected character '{}'.", *ctx.Current( ));
       }
-      diag.AddMessage(Diagnostics::Severity::Error, "Lexer failed.");
       return false;
     }
   }
@@ -526,9 +575,13 @@ auto Lexer::Context::GetCurrentLine( ) const noexcept -> std::string_view {
 auto Lexer::Context::GetSnippet( ) const noexcept -> Diagnostics::Snippet {
   Diagnostics::Snippet snippet;
   snippet.line = line_;
-  snippet.column = column_;
+  snippet.column = (column_ > 0) ? static_cast<u16>(column_ - 1) : 0;
   snippet.file_name = path_;
   snippet.text = GetCurrentLine( );
   return snippet;
+}
+
+auto Lexer::Context::SnippetFromSaved( ) const noexcept -> Diagnostics::Snippet {
+  return detail::BuildSnippet(contents_, path_, SpanFromSaved( ));
 }
 }

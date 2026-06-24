@@ -24,8 +24,6 @@ public:
     messages_.emplace_back(std::format(format, std::forward<Args>(args)...), std::move(snippet), severity);
   }
 
-  auto DoesLastHaveSnippet() const -> bool;
-  auto AddSnippetToLastMessage(Snippet&& snippet) -> void;
   auto PrintAll() const -> void;
 
 private:

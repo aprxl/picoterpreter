@@ -119,7 +119,7 @@ private:
   auto TryResolveTable(usize index, Diagnostics& diag) -> std::optional<usize>;
   /// Parses a `Number` token's text into its `u32` value, truncating at 0x3FF with a
   /// warning. Returns `false` only on an unparseable literal.
-  static auto ResolveNumberToken(Token& token, NumberLiteralBase base, Diagnostics& diag) -> bool;
+  auto ResolveNumberToken(Token& token, NumberLiteralBase base, Diagnostics& diag) -> bool;
   /// Consumes an optional `'d`/`'b` base specifier at `index`, marking both tokens `Skip`
   /// and setting `base`. Returns 0 (no specifier, defaults to hex), 2 (consumed), or
   /// `nullopt`.
@@ -127,6 +127,9 @@ private:
     -> std::optional<usize>;
 
   std::string_view path_;
+  /// The source buffer being tokenized. Valid only for the duration of `Tokenize`; used
+  /// by the resolve pass to build located diagnostics from each token's `SourceSpan`.
+  std::string_view source_;
   std::vector<Token> tokens_;
 };
 
@@ -440,6 +443,9 @@ public:
 
   [[nodiscard]] auto GetCurrentLine( ) const noexcept -> std::string_view;
   [[nodiscard]] auto GetSnippet( ) const noexcept -> Diagnostics::Snippet;
+  /// Builds a snippet anchored at the start of the token being matched (the `Save` point),
+  /// so lexing errors point at the offending token rather than wherever scanning stopped.
+  [[nodiscard]] auto SnippetFromSaved( ) const noexcept -> Diagnostics::Snippet;
 
 private:
   std::string_view contents_;
