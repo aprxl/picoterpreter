@@ -575,10 +575,10 @@ REGISTER_FORMAT_OVERRIDE(pico::Lexer::Token,
     case Lexer::Flag:
       return std::format("{}", self.value_as<Lexer::FlagKind>());
     case Lexer::Char:
-    case Lexer::Number:
     case Lexer::Register:
     case Lexer::RegisterBank:
       return std::format("{}", self.value_as<u32>());
+    case Lexer::Number:
     case Lexer::String:
     case Lexer::Identifier:
       return std::string{self.value_as<const char*>()};

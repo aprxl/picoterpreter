@@ -246,8 +246,7 @@ auto Lexer::TryNumber(Context& ctx) -> std::optional<Token> {
   Token token;
   token.kind = Number;
   /// Because of the way base specifiers work in Picoblaze, we can't convert this number
-  /// into an actual number just yet. We instead do a second pass over all found tokens and,
-  /// in that pass, we compute the desired value.
+  /// into an actual number just yet. We instead leave that to the parser.
   token.value = pool.Intern({ digits, size });
   return std::make_optional(token);
 }
@@ -365,158 +364,19 @@ auto Lexer::AddToken(const Token& token) -> bool {
   return kind != Invalid;
 }
 
-auto Lexer::Resolve(Diagnostics& diag) -> bool {
-  using ResolveFn = std::optional<usize> (Lexer::*)(usize, Diagnostics&);
-  /// Each resolver is keyed on the leading token kind of the group it handles. Resolvers fold away tokens
-  /// by marking them `Skip`.
-  static constexpr std::array<std::pair<TokenKind, ResolveFn>, 2> RESOLVE_FN = {{
-    { Number,      &Lexer::TryResolveNumber },
-    { BracketLeft, &Lexer::TryResolveTable  },
-  }};
-
-  for (usize read = 0; read < tokens_.size( ); ) {
-    ResolveFn resolver = nullptr;
-    for (const auto& [trigger, fn] : RESOLVE_FN) {
-      if (trigger == tokens_.at(read).kind) {
-        resolver = fn;
-        break;
-      }
-    }
-    if (resolver == nullptr) {
-      ++read;
-      continue;
-    }
-    const auto consumed = (this->*resolver)(read, diag);
-    if (!consumed) {
-      return false;
-    }
-    /// Every resolver consumes at least its leading token, so `read` always advances.
-    read += *consumed;
-  }
-
-  /// Drop the single-quote / base-specifier tokens the resolvers folded away.
-  std::erase_if(tokens_, [](const Token& token) { return token.kind == Skip; });
-  return true;
-}
-
-auto Lexer::TryConsumeBaseSpecifier(const usize index, NumberLiteralBase& base,
-  Diagnostics& diag) -> std::optional<usize> {
-  base = NumberLiteralBase::Hexadecimal;
-  /// A specifier is a `SingleQuote` followed by a one-character `Identifier`. Anything
-  /// else simply means there's no specifier here, so the value keeps its default base.
-  if (index + 1 >= tokens_.size( )
-      || tokens_.at(index).kind != SingleQuote
-      || tokens_.at(index + 1).kind != Identifier) {
-    return 0;
-  }
-
-  const auto& base_specifier = tokens_.at(index + 1).value_as<const char*>( );
-  if (*(base_specifier + 1) != '\0') {
-    auto snippet = detail::BuildSnippet(source_, path_, tokens_.at(index + 1).span);
-    diag.AddMessage(Diagnostics::Severity::Error, snippet,
-      "Invalid base specifier '{}'.", base_specifier);
-    return std::nullopt;
-  }
-
-  switch (*base_specifier) {
-    case 'd': base = NumberLiteralBase::Decimal; break;
-    case 'b': base = NumberLiteralBase::Binary; break;
-    default: {
-      auto snippet = detail::BuildSnippet(source_, path_, tokens_.at(index + 1).span);
-      diag.AddMessage(Diagnostics::Severity::Error, snippet,
-        "Unknown base specifier '{}', expected 'd' or 'b'.", base_specifier);
-      return std::nullopt;
-    }
-  }
-
-  tokens_.at(index).kind = Skip;
-  tokens_.at(index + 1).kind = Skip;
-  return 2;
-}
-
-auto Lexer::ResolveNumberToken(Token& token, const NumberLiteralBase base,
-  Diagnostics& diag) const -> bool {
-  /// Copy the text out before we overwrite `token.value` with the parsed result;
-  /// the string and the `u32` share the same variant storage.
-  const SourceSpan span = token.span;
-  const auto text = token.value_as<const char*>( );
-  const auto parsed = detail::StringToNumber(text, base, source_, path_, span, diag);
-  if (!parsed) {
-    auto snippet = detail::BuildSnippet(source_, path_, span);
-    diag.AddMessage(Diagnostics::Severity::Error, snippet,
-      "Unable to parse number token '{}'.", text);
-    return false;
-  }
-
-  u32 value = *parsed;
-  /// The maximum numeric literal supported in Picoblaze is 0x3FF.
-  if (value > 0x3ff_u32) {
-    auto snippet = detail::BuildSnippet(source_, path_, span);
-    diag.AddMessage(Diagnostics::Severity::Warning, snippet,
-      "Number literal '{}' exceeds limit of 3FF, truncating...", text);
-    value = 0x3ff_u32;
-  }
-
-  token.value.emplace<u32>(value);
-  return true;
-}
-
-auto Lexer::TryResolveNumber(const usize index, Diagnostics& diag) -> std::optional<usize> {
-  auto base = NumberLiteralBase::Hexadecimal;
-  /// A bare number may be followed by an optional base specifier (e.g. `123'd`).
-  const auto specifier = TryConsumeBaseSpecifier(index + 1, base, diag);
-  if (!specifier) {
-    return std::nullopt;
-  }
-  if (!ResolveNumberToken(tokens_.at(index), base, diag)) {
-    return std::nullopt;
-  }
-  /// The number itself plus an optional `'x` specifier (0 or 2 trailing tokens).
-  return 1 + *specifier;
-}
-
-auto Lexer::TryResolveTable(const usize index, Diagnostics& diag) -> std::optional<usize> {
-  /// `index` is the opening `[`. Find the matching `]`; everything in between is the
-  /// table body. Non-number tokens inside are left untouched.
-  usize close = index + 1;
-  while (close < tokens_.size( ) && tokens_.at(close).kind != BracketRight) {
-    ++close;
-  }
-  if (close >= tokens_.size( )) {
-    auto snippet = detail::BuildSnippet(source_, path_, tokens_.at(index).span);
-    diag.AddMessage(Diagnostics::Severity::Error, snippet,
-      "Unterminated table, expected ']'.");
-    return std::nullopt;
-  }
-
-  /// An optional `'d`/`'b` after the closing bracket sets the base for every number in
-  /// the table; absent, the table defaults to hexadecimal.
-  auto base = NumberLiteralBase::Hexadecimal;
-  const auto specifier = TryConsumeBaseSpecifier(close + 1, base, diag);
-  if (!specifier) {
-    return std::nullopt;
-  }
-
-  for (usize i = index + 1; i < close; ++i) {
-    if (tokens_.at(i).kind == Number && !ResolveNumberToken(tokens_.at(i), base, diag)) {
-      return std::nullopt;
-    }
-  }
-
-  /// The bracketed span ([ .. ]) plus an optional trailing `'x` specifier. The
-  /// brackets, commas and resolved numbers survive; only the specifier is folded away.
-  return (close - index + 1) + *specifier;
-}
-
 auto Lexer::Run(Diagnostics& diag) -> bool {
   const std::filesystem::path path(path_);
-  std::ifstream file(path);
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file.is_open( )) {
     diag.AddMessage(Diagnostics::Severity::Error, "Could not open file '{}'.", path_);
     return false;
   }
 
-  const std::string contents(std::istreambuf_iterator(file), {});
+  std::streamsize size = file.tellg( );
+  file.seekg(0, std::ios::beg);
+  std::string contents;
+  contents.resize(size);
+  file.read(contents.data( ), size);
   return Tokenize(contents, diag);
 }
 
@@ -563,16 +423,6 @@ auto Lexer::Tokenize(const std::string_view source, Diagnostics& diag) -> bool {
       }
       return false;
     }
-  }
-  /// Resolve some token pairs such as:
-  /// 123 ' d -> decimal number
-  /// 00010111 ' b -> binary number
-  /// [ 44, 23, 00 ]'d -> table of decimal numbers
-  ///
-  /// This method directly changes the tokens lexed thus far and also removes any tokens that are meaningless
-  /// to the parser.
-  if (!Resolve(diag)) {
-    return false;
   }
   return true;
 }
