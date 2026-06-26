@@ -9,67 +9,109 @@
 
 namespace pico
 {
+static constexpr auto IDENTIFIER_VALID_FIRST = [] consteval {
+  std::array<bool, 256> list{ };
+  for (usize i = 0; i < 256; ++i) {
+    if ((i >= 'a' && i <= 'z') || (i >= 'A' && i <= 'Z')) {
+      list[i] = true;
+    }
+  }
+  list['_'] = true;
+  return list;
+}();
+
+static constexpr auto IDENTIFIER_VALID = [] consteval {
+  std::array<bool, 256> list = IDENTIFIER_VALID_FIRST;
+  for (usize i = 0; i < 256; ++i) {
+    if (i >= '0' && i <= '9') {
+      list[i] = true;
+    }
+  }
+  /// Some instructions in Picoblaze have special characters in them, so
+  /// we include it in the list since we parse both instructions and identifiers together.
+  list['&'] = true;
+  list['@'] = true;
+  return list;
+}();
+
+static constexpr auto INSTRUCTION_EXCLUSIVE = [] consteval {
+  std::array<bool, 256> list{ };
+  list['&'] = true;
+  list['@'] = true;
+  return list;
+}();
+
+static constexpr auto TO_LOWER = [] consteval {
+  std::array<char, 256> list{ };
+  for (usize i = 0; i < 256; ++i) {
+    if (i >= 'A' && i <= 'Z') {
+      list[i] = static_cast<char>(i + 32_u8);
+    } else {
+      list[i] = static_cast<char>(i);
+    }
+  }
+  return list;
+}();
+
+static constexpr auto DIGITS = [] consteval {
+  std::array<bool, 256> list{ };
+  for (usize i = 0; i < 256; ++i) {
+    if (i >= '0' && i <= '9') {
+      list[i] = true;
+    }
+  }
+  return list;
+}();
+
+static constexpr auto HEX_DIGITS = [] consteval {
+  std::array<bool, 256> list{ };
+  for (usize i = 0; i < 256; ++i) {
+    if ((i >= 'a' && i <= 'f') || (i >= 'A' && i <= 'F')) {
+      list[i] = true;
+    }
+  }
+  return list;
+}();
+
+static constexpr auto NUMBER_VALID = [] consteval {
+  std::array<bool, 256> list{ };
+  for (usize i = 0; i < 256; ++i) {
+    if ((i >= '0' && i <= '9') || (i >= 'A' && i <= 'F') || (i >= 'a' && i <= 'f')) {
+      list[i] = true;
+    }
+  }
+  return list;
+}();
+
+static constexpr auto OPERATORS = [] consteval {
+  std::array<bool, 256> list{ };
+  list['\''] = true;
+  list['\"'] = true;
+  list['~'] = true;
+  list['['] = true;
+  list[']'] = true;
+  list['('] = true;
+  list[')'] = true;
+  list[','] = true;
+  list[':'] = true;
+  list['%'] = true;
+  list['#'] = true;
+  list['$'] = true;
+  return list;
+}();
+
+static constexpr auto WHITESPACE = [] consteval {
+  std::array<bool, 256> list{ };
+  for (usize i = 0; i < 256; ++i) {
+    if (i == ' ' || i == '\t' || i == '\n' || i == '\r') {
+      list[i] = true;
+    }
+  }
+  return list;
+}();
+
 class Lexer {
   using BufferIterator = std::string_view::iterator;
-  static constexpr auto IDENTIFIER_VALID_FIRST = [] consteval {
-    std::array<bool, 256> list{ };
-    for (usize i = 0; i < 256; ++i) {
-      if ((i >= 'a' && i <= 'z') || (i >= 'A' && i <= 'Z')) {
-        list[i] = true;
-      }
-    }
-    list['_'] = true;
-    return list;
-  }();
-
-  static constexpr auto IDENTIFIER_VALID = [] consteval {
-    std::array<bool, 256> list = IDENTIFIER_VALID_FIRST;
-    for (usize i = 0; i < 256; ++i) {
-      if (i >= '0' && i <= '9') {
-        list[i] = true;
-      }
-    }
-    /// Some instructions in Picoblaze have special characters in them, so
-    /// we include it in the list since we parse both instructions and identifiers together.
-    list['&'] = true;
-    list['@'] = true;
-    return list;
-  }();
-
-  static constexpr auto NUMBER_VALID = [] consteval {
-    std::array<bool, 256> list{ };
-    for (usize i = 0; i < 256; ++i) {
-      if ((i >= '0' && i <= '9') || (i >= 'A' && i <= 'F') || (i >= 'a' && i <= 'f')) {
-        list[i] = true;
-      }
-    }
-    return list;
-  }();
-
-  static constexpr auto OPERATORS = [] consteval {
-    std::array<bool, 256> list{ };
-    list['\''] = true;
-    list['\"'] = true;
-    list['~'] = true;
-    list['['] = true;
-    list[']'] = true;
-    list[','] = true;
-    list[':'] = true;
-    list['%'] = true;
-    list['#'] = true;
-    list['$'] = true;
-    return list;
-  }();
-
-  static constexpr auto WHITESPACE = [] consteval {
-    std::array<bool, 256> list{ };
-    for (usize i = 0; i < 256; ++i) {
-      if (i == ' ' || i == '\t' || i == '\n' || i == '\r') {
-        list[i] = true;
-      }
-    }
-    return list;
-  }();
 
 public:
   enum TokenKind : u8;
@@ -77,6 +119,7 @@ public:
   enum class FlagKind : u8;
   enum class NumberLiteralBase : u8;
   struct SourceSpan;
+  struct Symbol;
   struct Token;
   class Context;
 
@@ -98,18 +141,18 @@ public:
 
 private:
   static auto TryIdentifier(Context& ctx) -> std::optional<Token>;
-  static auto TryNarrowIdentifier(Context& ctx, Token& token) -> bool;
-  static auto TryNarrowIntoFlag(std::string_view lower, Token& token) -> bool;
-  static auto TryNarrowIntoRegister(std::string_view lower, Token& token) -> bool;
-  static auto TryNarrowIntoInstruction(std::string_view lower, Token& token) -> bool;
-  static auto TryNarrowIntoRegisterBank(char c, Token& token) -> bool;
+  static auto TryNarrowIdentifier(Context& ctx, Token& token, const Symbol& symbol) -> bool;
+  static auto TryNarrowIntoFlag(const Symbol& symbol, Token& token) -> bool;
+  static auto TryNarrowIntoRegister(const Symbol& symbol, Token& token) -> bool;
+  static auto TryNarrowIntoInstruction(const Symbol& symbol, Token& token) -> bool;
+  static auto TryNarrowIntoRegisterBank(const Symbol& symbol, Token& token) -> bool;
   static auto TryNumber(Context& ctx) -> std::optional<Token>;
   static auto TryOperator(Context& ctx) -> std::optional<Token>;
   static auto TryComment(Context& ctx) -> std::optional<Token>;
   static auto TryString(Context& ctx) -> std::optional<Token>;
   static auto TryNarrowIntoChar(std::string_view lower, Token& token) -> bool;
 
-  auto AddToken(Token&& token) -> bool;
+  auto AddToken(const Token& token) -> bool;
   /// Second pass that folds multi-token groups (numbers, tables) into resolved values
   /// and drops the syntactic leftovers. Dispatches over the `TryResolve*` methods below.
   auto Resolve(Diagnostics& diag) -> bool;
@@ -119,7 +162,7 @@ private:
   auto TryResolveTable(usize index, Diagnostics& diag) -> std::optional<usize>;
   /// Parses a `Number` token's text into its `u32` value, truncating at 0x3FF with a
   /// warning. Returns `false` only on an unparseable literal.
-  auto ResolveNumberToken(Token& token, NumberLiteralBase base, Diagnostics& diag) -> bool;
+  auto ResolveNumberToken(Token& token, NumberLiteralBase base, Diagnostics& diag) const -> bool;
   /// Consumes an optional `'d`/`'b` base specifier at `index`, marking both tokens `Skip`
   /// and setting `base`. Returns 0 (no specifier, defaults to hex), 2 (consumed), or
   /// `nullopt`.
@@ -152,6 +195,9 @@ enum Lexer::TokenKind : u8 {
   BracketLeft,
   BracketRight,
   Hashtag,
+  /// Dereferencing
+  ParenLeft,
+  ParenRight,
   /// Separator
   Comma,
   /// Labels
@@ -236,11 +282,21 @@ struct Lexer::SourceSpan {
   u16 length = 0;
 };
 
+struct Lexer::Symbol {
+  usize hash;
+  usize size;
+  BufferIterator begin, end;
+  bool can_be_identifier, looks_like_number;
+
+  [[nodiscard]] auto to_string() const -> std::string_view {
+    return { begin, end };
+  }
+};
+
 struct Lexer::Token {
   TokenKind kind = Invalid;
   SourceSpan span{ };
-  PICO_TODO("Intern strings to get rid of the std::string here.");
-  std::variant<u32, InstructionKind, FlagKind, std::string> value;
+  std::variant<u32, InstructionKind, FlagKind, const char*> value;
 
   template <typename T>
   T& value_as( ) { return std::get<T>(value); }
@@ -251,7 +307,7 @@ struct Lexer::Token {
 /// To help the code structure, we declare everything about an instruction/directive in a single struct.
 /// This way, adding or changing new instructions is trivial and automatically handled everywhere.
 struct InstructionInfo {
-  std::string_view mnemonic;
+  usize mnemonic;
   Lexer::InstructionKind kind;
   std::string_view name;
 };
@@ -259,73 +315,80 @@ struct InstructionInfo {
 inline constexpr auto INSTRUCTION_TABLE = std::to_array<InstructionInfo>({
   /// `Nop` has no mnemonic: it is created by the parser, never lexed, but
   /// still needs a display name.
-  { "",             Lexer::InstructionKind::Nop,                      "Nop" },
-  { "address",      Lexer::InstructionKind::Address,                  "Address" },
-  { "add",          Lexer::InstructionKind::Add,                      "Add" },
-  { "addcy",        Lexer::InstructionKind::AddCarry,                 "AddCarry" },
-  { "sub",          Lexer::InstructionKind::Subtract,                 "Subtract" },
-  { "subcy",        Lexer::InstructionKind::SubtractCarry,            "SubtractCarry" },
-  { "input",        Lexer::InstructionKind::Input,                    "Input" },
-  { "output",       Lexer::InstructionKind::Output,                   "Output" },
-  { "and",          Lexer::InstructionKind::And,                      "And" },
-  { "call",         Lexer::InstructionKind::Call,                     "Call" },
-  { "call@",        Lexer::InstructionKind::CallAt,                   "CallAt" },
-  { "compare",      Lexer::InstructionKind::Compare,                  "Compare" },
-  { "comparecy",    Lexer::InstructionKind::CompareCarry,             "CompareCarry" },
-  { "constant",     Lexer::InstructionKind::Constant,                 "Constant" },
-  { "default_jump", Lexer::InstructionKind::DefaultJump,              "DefaultJump" },
-  { "disable",      Lexer::InstructionKind::Disable,                  "Disable" },
-  { "enable",       Lexer::InstructionKind::Enable,                   "Enable" },
-  { "fetch",        Lexer::InstructionKind::Fetch,                    "Fetch" },
-  { "hwbuild",      Lexer::InstructionKind::HardwareBuild,            "HardwareBuild" },
-  { "inst",         Lexer::InstructionKind::InstructionInstantiation, "InstructionInstantiation" },
-  { "jump",         Lexer::InstructionKind::Jump,                     "Jump" },
-  { "jump@",        Lexer::InstructionKind::JumpAt,                   "JumpAt" },
-  { "load",         Lexer::InstructionKind::Load,                     "Load" },
-  { "load&return",  Lexer::InstructionKind::LoadAndReturn,            "LoadAndReturn" },
-  { "namereg",      Lexer::InstructionKind::NameRegister,             "NameRegister" },
-  { "or",           Lexer::InstructionKind::Or,                       "Or" },
-  { "outputk",      Lexer::InstructionKind::OutputK,                  "OutputK" },
-  { "regbank",      Lexer::InstructionKind::RegisterBank,             "RegisterBank" },
-  { "return",       Lexer::InstructionKind::Return,                   "Return" },
-  { "returni",      Lexer::InstructionKind::ReturnInterrupt,          "ReturnInterrupt" },
-  { "rl",           Lexer::InstructionKind::RotateLeft,               "RotateLeft" },
-  { "rr",           Lexer::InstructionKind::RotateRight,              "RotateRight" },
-  { "sl0",          Lexer::InstructionKind::ShiftLeftWithZero,        "ShiftLeftWithZero" },
-  { "sl1",          Lexer::InstructionKind::ShiftLeftWithOne,         "ShiftLeftWithOne" },
-  { "sla",          Lexer::InstructionKind::ShiftLeftWithCarry,       "ShiftLeftWithCarry" },
-  { "slx",          Lexer::InstructionKind::ShiftLeftArith,           "ShiftLeftArith" },
-  { "sr0",          Lexer::InstructionKind::ShiftRightWithZero,       "ShiftRightWithZero" },
-  { "sr1",          Lexer::InstructionKind::ShiftRightWithOne,        "ShiftRightWithOne" },
-  { "sra",          Lexer::InstructionKind::ShiftRightWithCarry,      "ShiftRightWithCarry" },
-  { "srx",          Lexer::InstructionKind::ShiftRightArith,          "ShiftRightArith" },
-  { "star",         Lexer::InstructionKind::Star,                     "Star" },
-  { "store",        Lexer::InstructionKind::Store,                    "Store" },
-  { "string",       Lexer::InstructionKind::StringDefinition,         "StringDefinition" },
-  { "table",        Lexer::InstructionKind::TableDefinition,          "TableDefinition" },
-  { "test",         Lexer::InstructionKind::Test,                     "Test" },
-  { "testcy",       Lexer::InstructionKind::TestCarry,                "TestCarry" },
-  { "xor",          Lexer::InstructionKind::Xor,                      "Xor" },
+  { 0,             Lexer::InstructionKind::Nop,                      "Nop" },
+  { FNV1AHash("address"),      Lexer::InstructionKind::Address,                  "Address" },
+  { FNV1AHash("add"),          Lexer::InstructionKind::Add,                      "Add" },
+  { FNV1AHash("addcy"),        Lexer::InstructionKind::AddCarry,                 "AddCarry" },
+  { FNV1AHash("sub"),          Lexer::InstructionKind::Subtract,                 "Subtract" },
+  { FNV1AHash("subcy"),        Lexer::InstructionKind::SubtractCarry,            "SubtractCarry" },
+  { FNV1AHash("input"),        Lexer::InstructionKind::Input,                    "Input" },
+  { FNV1AHash("output"),       Lexer::InstructionKind::Output,                   "Output" },
+  { FNV1AHash("and"),          Lexer::InstructionKind::And,                      "And" },
+  { FNV1AHash("call"),         Lexer::InstructionKind::Call,                     "Call" },
+  { FNV1AHash("call@"),        Lexer::InstructionKind::CallAt,                   "CallAt" },
+  { FNV1AHash("compare"),      Lexer::InstructionKind::Compare,                  "Compare" },
+  { FNV1AHash("comparecy"),    Lexer::InstructionKind::CompareCarry,             "CompareCarry" },
+  { FNV1AHash("constant"),     Lexer::InstructionKind::Constant,                 "Constant" },
+  { FNV1AHash("default_jump"), Lexer::InstructionKind::DefaultJump,              "DefaultJump" },
+  { FNV1AHash("disable"),      Lexer::InstructionKind::Disable,                  "Disable" },
+  { FNV1AHash("enable"),       Lexer::InstructionKind::Enable,                   "Enable" },
+  { FNV1AHash("fetch"),        Lexer::InstructionKind::Fetch,                    "Fetch" },
+  { FNV1AHash("hwbuild"),      Lexer::InstructionKind::HardwareBuild,            "HardwareBuild" },
+  { FNV1AHash("inst"),         Lexer::InstructionKind::InstructionInstantiation, "InstructionInstantiation" },
+  { FNV1AHash("jump"),         Lexer::InstructionKind::Jump,                     "Jump" },
+  { FNV1AHash("jump@"),        Lexer::InstructionKind::JumpAt,                   "JumpAt" },
+  { FNV1AHash("load"),         Lexer::InstructionKind::Load,                     "Load" },
+  { FNV1AHash("load&return"),  Lexer::InstructionKind::LoadAndReturn,            "LoadAndReturn" },
+  { FNV1AHash("namereg"),      Lexer::InstructionKind::NameRegister,             "NameRegister" },
+  { FNV1AHash("or"),           Lexer::InstructionKind::Or,                       "Or" },
+  { FNV1AHash("outputk"),      Lexer::InstructionKind::OutputK,                  "OutputK" },
+  { FNV1AHash("regbank"),      Lexer::InstructionKind::RegisterBank,             "RegisterBank" },
+  { FNV1AHash("return"),       Lexer::InstructionKind::Return,                   "Return" },
+  { FNV1AHash("returni"),      Lexer::InstructionKind::ReturnInterrupt,          "ReturnInterrupt" },
+  { FNV1AHash("rl"),           Lexer::InstructionKind::RotateLeft,               "RotateLeft" },
+  { FNV1AHash("rr"),           Lexer::InstructionKind::RotateRight,              "RotateRight" },
+  { FNV1AHash("sl0"),          Lexer::InstructionKind::ShiftLeftWithZero,        "ShiftLeftWithZero" },
+  { FNV1AHash("sl1"),          Lexer::InstructionKind::ShiftLeftWithOne,         "ShiftLeftWithOne" },
+  { FNV1AHash("sla"),          Lexer::InstructionKind::ShiftLeftWithCarry,       "ShiftLeftWithCarry" },
+  { FNV1AHash("slx"),          Lexer::InstructionKind::ShiftLeftArith,           "ShiftLeftArith" },
+  { FNV1AHash("sr0"),          Lexer::InstructionKind::ShiftRightWithZero,       "ShiftRightWithZero" },
+  { FNV1AHash("sr1"),          Lexer::InstructionKind::ShiftRightWithOne,        "ShiftRightWithOne" },
+  { FNV1AHash("sra"),          Lexer::InstructionKind::ShiftRightWithCarry,      "ShiftRightWithCarry" },
+  { FNV1AHash("srx"),          Lexer::InstructionKind::ShiftRightArith,          "ShiftRightArith" },
+  { FNV1AHash("star"),         Lexer::InstructionKind::Star,                     "Star" },
+  { FNV1AHash("store"),        Lexer::InstructionKind::Store,                    "Store" },
+  { FNV1AHash("string"),       Lexer::InstructionKind::StringDefinition,         "StringDefinition" },
+  { FNV1AHash("table"),        Lexer::InstructionKind::TableDefinition,          "TableDefinition" },
+  { FNV1AHash("test"),         Lexer::InstructionKind::Test,                     "Test" },
+  { FNV1AHash("testcy"),       Lexer::InstructionKind::TestCarry,                "TestCarry" },
+  { FNV1AHash("xor"),          Lexer::InstructionKind::Xor,                      "Xor" },
 });
 
 struct FlagInfo {
-  std::string_view text;
+  usize hash;
   Lexer::FlagKind kind;
   std::string_view name;
 };
 
 inline constexpr auto FLAG_TABLE = std::to_array<FlagInfo>({
-  { "c",  Lexer::FlagKind::Carry,    "Carry" },
-  { "z",  Lexer::FlagKind::Zero,     "Zero" },
-  { "nc", Lexer::FlagKind::NotCarry, "NotCarry" },
-  { "nz", Lexer::FlagKind::NotZero,  "NotZero" },
+  { FNV1AHash("c"),  Lexer::FlagKind::Carry,    "Carry" },
+  { FNV1AHash("z"),  Lexer::FlagKind::Zero,     "Zero" },
+  { FNV1AHash("nc"), Lexer::FlagKind::NotCarry, "NotCarry" },
+  { FNV1AHash("nz"), Lexer::FlagKind::NotZero,  "NotZero" },
 });
 
-/// Looks up a (lowercased) mnemonic. Returns `nullopt` for non-keywords.
-constexpr auto InstructionFromMnemonic(std::string_view mnemonic) -> std::optional<Lexer::InstructionKind> {
+inline constexpr auto REGISTER_TABLE = std::to_array<usize>({
+  FNV1AHash("s0"), FNV1AHash("s1"), FNV1AHash("s2"), FNV1AHash("s3"),
+  FNV1AHash("s4"), FNV1AHash("s5"), FNV1AHash("s6"), FNV1AHash("s7"),
+  FNV1AHash("s8"), FNV1AHash("s9"), FNV1AHash("sa"), FNV1AHash("sb"),
+  FNV1AHash("sc"), FNV1AHash("sd"), FNV1AHash("se"), FNV1AHash("sf"),
+});
+
+/// Looks up a (lowercased) mnemonic hash. Returns `nullopt` for non-keywords.
+constexpr auto InstructionFromMnemonic(usize hash) -> std::optional<Lexer::InstructionKind> {
   for (const auto& entry : INSTRUCTION_TABLE) {
-    if (!entry.mnemonic.empty( ) && entry.mnemonic == mnemonic) {
-      return entry.kind;
+    if (entry.mnemonic != 0_usize && entry.mnemonic == hash) {
+      return std::make_optional(entry.kind);
     }
   }
   return std::nullopt;
@@ -340,9 +403,9 @@ constexpr auto InstructionName(Lexer::InstructionKind kind) -> std::string_view 
   return "Unknown";
 }
 
-constexpr auto FlagFromText(std::string_view text) -> std::optional<Lexer::FlagKind> {
+constexpr auto FlagFromText(usize hash) -> std::optional<Lexer::FlagKind> {
   for (const auto& entry : FLAG_TABLE) {
-    if (entry.text == text) {
+    if (entry.hash == hash) {
       return entry.kind;
     }
   }
@@ -357,6 +420,16 @@ constexpr auto FlagName(Lexer::FlagKind kind) -> std::string_view {
   }
   return "Unknown";
 }
+
+constexpr auto IsRegister(usize hash) -> bool {
+  for (const auto& entry : REGISTER_TABLE) {
+    if (entry == hash) {
+      return true;
+    }
+  }
+  return false;
+}
+
 
 class Lexer::Context {
 public:
@@ -408,6 +481,11 @@ public:
   [[nodiscard]] auto IsIdentifierValid( ) const noexcept -> bool {
     if (Ended( )) { return false; }
     return IDENTIFIER_VALID[*iterator_];
+  }
+
+  [[nodiscard]] auto IsInstructionExclusive( ) const noexcept -> bool {
+    if (Ended( )) { return false; }
+    return INSTRUCTION_EXCLUSIVE[*iterator_];
   }
 
   [[nodiscard]] auto IsNumberValid( ) const noexcept -> bool {
@@ -473,6 +551,8 @@ REGISTER_FORMAT_OVERRIDE(pico::Lexer::TokenKind, "{}", [&] {
     case Lexer::Tilda: return "Tilda";
     case Lexer::BracketLeft: return "BracketLeft";
     case Lexer::BracketRight: return "BracketRight";
+    case Lexer::ParenLeft: return "ParenLeft";
+    case Lexer::ParenRight: return "ParenRight";
     case Lexer::Hashtag: return "Hashtag";
     case Lexer::Comma: return "Comma";
     case Lexer::Colon: return "Colon";
@@ -501,7 +581,7 @@ REGISTER_FORMAT_OVERRIDE(pico::Lexer::Token,
       return std::format("{}", self.value_as<u32>());
     case Lexer::String:
     case Lexer::Identifier:
-      return self.value_as<std::string>();
+      return std::string{self.value_as<const char*>()};
     default:
       return std::string{"Invalid"};
   }

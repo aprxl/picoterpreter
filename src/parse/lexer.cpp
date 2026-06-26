@@ -3,30 +3,26 @@
 #include <filesystem>
 #include <fstream>
 
+#include <utilities/forward_hash.hpp>
+#include <utilities/byte_arena.hpp>
+
 namespace pico
 {
+static detail::StringPool pool{ };
+
 namespace detail
 {
 /// Converts a single hexadecimal digit to its value, or `nullopt` if `c` is not
 /// a hex digit.
 constexpr auto CharToHexU8(const char c) noexcept -> std::optional<u8> {
-  if (c >= '0' && c <= '9') {
+  if (DIGITS[c]) {
     return static_cast<u8>(c - '0');
   }
-  const char lower = (c >= 'A' && c <= 'F') ? static_cast<char>(c + 32_u8) : c;
-  if (lower >= 'a' && lower <= 'f') {
-    return static_cast<u8>(lower - 'a' + 10);
+  const char lower = TO_LOWER[c];
+  if (HEX_DIGITS[c]) {
+    return static_cast<u8>(lower - 'a' + 10_u8);
   }
   return std::nullopt;
-}
-
-auto StringToLower(const std::string_view str) -> std::string {
-  std::string result{ };
-  result.reserve(str.size( ));
-  for (const char c : str) {
-    result += (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32_u8) : c;
-  }
-  return result;
 }
 
 /// Builds a diagnostic snippet for `span` by extracting the full source line that
@@ -49,8 +45,8 @@ auto BuildSnippet(const std::string_view source, const std::string_view path,
   Diagnostics::Snippet snippet;
   snippet.line = span.line;
   snippet.column = (span.column > 0) ? static_cast<u16>(span.column - 1) : 0;
-  snippet.file_name = std::string(path);
-  snippet.text = std::string(line);
+  snippet.file_name = pool.Intern(path);
+  snippet.text = pool.Intern(line);
   return snippet;
 }
 
@@ -112,8 +108,9 @@ auto StringToNumber(const std::string_view str, const Lexer::NumberLiteralBase b
 }
 } // namespace pico::detail
 
-constexpr usize IDENTIFIER_MIN_CAPACITY = 8_usize;
-constexpr usize NUMBER_MIN_CAPACITY = 3_usize;
+/// Widest raw literal we accept before resolution (binary numbers can have 8 digits);
+/// per-base digit limits are enforced later in `detail::StringToNumber`.
+constexpr u8 NUMBER_MAX_DIGITS = 8_u8;
 constexpr usize STRING_MIN_CAPACITY = 8_usize;
 
 auto Lexer::TryIdentifier(Context& ctx) -> std::optional<Token> {
@@ -123,75 +120,82 @@ auto Lexer::TryIdentifier(Context& ctx) -> std::optional<Token> {
     return { };
   }
 
-  bool has_only_hex_characters = true;
-  std::string identifier{ };
-  identifier.reserve(IDENTIFIER_MIN_CAPACITY);
+  Symbol symbol{ };
+  symbol.can_be_identifier = true;
+  symbol.looks_like_number = true;
+  symbol.begin = ctx.Current( );
+  detail::ForwardHash hash{ };
   while (ctx.IsIdentifierValid( )) {
     /// Make sure that our identifier isn't a valid hexadecimal number.
     if (!ctx.IsNumberValid( ))
-      has_only_hex_characters = false;
-    identifier += *ctx.Current( );
+      symbol.looks_like_number = false;
+    else if (ctx.IsInstructionExclusive( ))
+      symbol.can_be_identifier = false;
+    const char c = *ctx.Current( );
+    hash.AddCharacter(TO_LOWER[c]);
     ctx.Next( );
   }
+  symbol.end = ctx.Current( );
+  symbol.size = std::distance(symbol.begin, symbol.end);
+  symbol.hash = hash.hash( );
 
   const bool looks_like_hex_literal =
-    has_only_hex_characters && identifier.size( ) > 1 && identifier.size( ) <= 3;
-  token.value = std::move(identifier);
+    symbol.looks_like_number && symbol.size > 1 && symbol.size <= 3;
   /// Instead of writing different match predicates for registers and instructions,
   /// we just parse any identifier then later try to narrow it down into those two.
   /// If `Lexer::TryNarrowIdentifier` matches against a register or instruction,
   /// it'll assign the correct token kind to `token` and change the value accordingly.
   /// If it fails, it'll return `false`, so we error out by setting the token type to `Invalid`.
-  if (!TryNarrowIdentifier(ctx, token)) {
+  if (!TryNarrowIdentifier(ctx, token, symbol)) {
     token.kind = Invalid;
-    return std::make_optional(std::move(token));
+    return std::make_optional(token);
   }
 
-  /// If it stayed a plain identifier yet is composed solely of hex digits (e.g. `ab`),
-  /// it's really a number: defer to `TryNumber`. Keywords that happen to be hex
-  /// (e.g. `add`) have already been narrowed above, so they are kept as-is.
-  if (token.kind == Identifier && looks_like_hex_literal) {
-    return { };
+  /// Only a token that stayed a plain `Identifier` carries a string value, meanwhile narrowed
+  /// tokens (registers, instructions, flags, banks) already hold their respective values.
+  if (token.kind == Identifier) {
+    /// If it is composed solely of hex digits (e.g. `ab`), it's really a number: defer
+    /// to `TryNumber`. Keywords that happen to be hex (e.g. `add`) were narrowed above.
+    if (looks_like_hex_literal) {
+      return { };
+    }
+    token.value = pool.Intern(symbol.to_string( ));
   }
-  return std::make_optional(std::move(token));
+  return std::make_optional(token);
 }
 
-auto Lexer::TryNarrowIdentifier(Context& ctx, Token& token) -> bool {
+auto Lexer::TryNarrowIdentifier(Context& ctx, Token& token, const Symbol& symbol) -> bool {
   if (token.kind != Identifier) {
     return false;
   }
 
-  const auto& ident = token.value_as<std::string>( );
-  const std::string lower = detail::StringToLower(ident);
   /// Each helper only mutates `token` when it matches, so short-circuiting keeps
   /// the first match and avoids the later helpers clobbering it.
-  bool narrowed = TryNarrowIntoInstruction(lower, token)
-               || TryNarrowIntoRegister(lower, token)
-               || TryNarrowIntoFlag(lower, token);
+  bool narrowed = TryNarrowIntoInstruction(symbol, token)
+               || TryNarrowIntoRegister(symbol, token)
+               || TryNarrowIntoFlag(symbol, token);
 
   /// A `RegisterBank` token is a single character (`a`/`b`), and cannot follow a
   /// single quote. Checking the length keeps instructions like `add` from
   /// being narrowed into register bank A.
-  if (!narrowed && ctx.state( ) != Context::State::RightAfterSingleQuote && ident.size( ) == 1) {
-    narrowed = TryNarrowIntoRegisterBank(ident.at(0), token);
+  if (!narrowed && ctx.state( ) != Context::State::RightAfterSingleQuote && symbol.size == 1) {
+    narrowed = TryNarrowIntoRegisterBank(symbol, token);
   }
 
   ctx.state(Context::State::Default);
   /// If it wasn't narrowed, then we still have an identifier. So let's make sure
   /// that it is a valid one.
-  if (!narrowed && (ident.find('*') != std::string::npos
-                 || ident.find('&') != std::string::npos
-                 || ident.find('@') != std::string::npos)) {
+  if (!narrowed && !symbol.can_be_identifier) {
     auto snippet = ctx.SnippetFromSaved( );
     ctx.diag( ).AddMessage(Diagnostics::Severity::Error, snippet,
-      "Identifier '{}' contains characters reserved for instructions.", ident);
+      "Identifier '{}' contains characters reserved for instructions.", symbol.to_string( ));
     return false;
   }
   return true;
 }
 
-auto Lexer::TryNarrowIntoFlag(const std::string_view lower, Token& token) -> bool {
-  if (const auto kind = FlagFromText(lower)) {
+auto Lexer::TryNarrowIntoFlag(const Symbol& symbol, Token& token) -> bool {
+  if (const auto kind = FlagFromText(symbol.hash)) {
     token.kind = Flag;
     token.value = *kind;
     return true;
@@ -199,10 +203,11 @@ auto Lexer::TryNarrowIntoFlag(const std::string_view lower, Token& token) -> boo
   return false;
 }
 
-auto Lexer::TryNarrowIntoRegister(const std::string_view lower, Token& token) -> bool {
+auto Lexer::TryNarrowIntoRegister(const Symbol& symbol, Token& token) -> bool {
   /// Registers are `s0`..`sf`: the letter `s` followed by a single hex nibble.
-  if (lower.size( ) == 2 && lower[0] == 's') {
-    if (const auto nibble = detail::CharToHexU8(lower[1])) {
+  const char first = symbol.size == 2 ? *symbol.begin : '\0';
+  if (first == 's' || first == 'S') {
+    if (const auto nibble = detail::CharToHexU8(*(symbol.begin + 1))) {
       token.kind = Register;
       token.value = static_cast<u32>(*nibble);
       return true;
@@ -211,8 +216,8 @@ auto Lexer::TryNarrowIntoRegister(const std::string_view lower, Token& token) ->
   return false;
 }
 
-auto Lexer::TryNarrowIntoInstruction(const std::string_view lower, Token& token) -> bool {
-  if (const auto kind = InstructionFromMnemonic(lower)) {
+auto Lexer::TryNarrowIntoInstruction(const Symbol& symbol, Token& token) -> bool {
+  if (const auto kind = InstructionFromMnemonic(symbol.hash)) {
     token.kind = InstructionOrDirective;
     token.value = *kind;
     return true;
@@ -225,30 +230,38 @@ auto Lexer::TryNumber(Context& ctx) -> std::optional<Token> {
     return { };
   }
 
-  std::string number{ };
-  number.reserve(NUMBER_MIN_CAPACITY);
+  char digits[NUMBER_MAX_DIGITS];
+  u8 size = 0;
   while (ctx.IsNumberValid( )) {
-    number += *ctx.Current( );
+    if (size == NUMBER_MAX_DIGITS) {
+      auto snippet = ctx.SnippetFromSaved( );
+      ctx.diag( ).AddMessage(Diagnostics::Severity::Error, snippet,
+        "Numbers may only have at most {} digits.", NUMBER_MAX_DIGITS);
+      return std::nullopt;
+    }
+    digits[size++] = *ctx.Current( );
     ctx.Next( );
   }
 
   Token token;
   token.kind = Number;
-  /// Because of the way base specifies work in Picoblaze, we can't convert this number
+  /// Because of the way base specifiers work in Picoblaze, we can't convert this number
   /// into an actual number just yet. We instead do a second pass over all found tokens and,
   /// in that pass, we compute the desired value.
-  token.value = std::move(number);
-  return std::make_optional(std::move(token));
+  token.value = pool.Intern({ digits, size });
+  return std::make_optional(token);
 }
 
-auto Lexer::TryNarrowIntoRegisterBank(const char c, Token& token) -> bool {
-  if (c == 'A' || c == 'a') {
+auto Lexer::TryNarrowIntoRegisterBank(const Symbol& symbol, Token& token) -> bool {
+  if (symbol.size != 1) {
+    return false;
+  }
+  if (symbol.hash == FNV1AHash("a")) {
     token.kind = RegisterBank;
     token.value = 0_u32;
     return true;
   }
-
-  if (c == 'B' || c == 'b') {
+  if (symbol.hash == FNV1AHash("b")) {
     token.kind = RegisterBank;
     token.value = 1_u32;
     return true;
@@ -271,6 +284,8 @@ auto Lexer::TryOperator(Context& ctx) -> std::optional<Token> {
     case '~': token.kind = Tilda; break;
     case '[': token.kind = BracketLeft; break;
     case ']': token.kind = BracketRight; break;
+    case '(': token.kind = ParenLeft; break;
+    case ')': token.kind = ParenRight; break;
     case '#': token.kind = Hashtag; break;
     case ',': token.kind = Comma; break;
     case ':': token.kind = Colon; break;
@@ -280,7 +295,7 @@ auto Lexer::TryOperator(Context& ctx) -> std::optional<Token> {
   }
 
   ctx.Next( );
-  return std::make_optional(std::move(token));
+  return std::make_optional(token);
 }
 
 auto Lexer::TryComment(Context &ctx) -> std::optional<Token> {
@@ -293,7 +308,7 @@ auto Lexer::TryComment(Context &ctx) -> std::optional<Token> {
   }
   Token token;
   token.kind = Skip;
-  return std::make_optional(std::move(token));
+  return std::make_optional(token);
 }
 
 auto Lexer::TryString(Context& ctx) -> std::optional<Token> {
@@ -303,11 +318,10 @@ auto Lexer::TryString(Context& ctx) -> std::optional<Token> {
 
   Token token;
   token.kind = String;
-  std::string string{ };
-  string.reserve(STRING_MIN_CAPACITY);
+  auto string = pool.Dynamic(STRING_MIN_CAPACITY);
   ctx.Next( );
   while (!ctx.Ended( ) && !ctx.Is('\"') && !ctx.Is('\n') && !ctx.Is('\r')) {
-    string += *ctx.Current( );
+    string.Append(*ctx.Current( ));
     ctx.Next( );
   }
 
@@ -319,22 +333,22 @@ auto Lexer::TryString(Context& ctx) -> std::optional<Token> {
   }
   ctx.Next( );
 
-  if (string.empty( )) {
+  if (string.size( ) == 0) {
     auto snippet = ctx.SnippetFromSaved( );
     ctx.diag( ).AddMessage(Diagnostics::Severity::Error, snippet, "String cannot be empty.");
     return { };
   }
   /// Strings and characters in Picoblaze both use double quotes in their definition, so we
   /// check if we got a character or a string literal here.
-  if (TryNarrowIntoChar(string, token)) {
-    return std::make_optional(std::move(token));
+  if (TryNarrowIntoChar(string.view( ), token)) {
+    return std::make_optional(token);
   }
 
-  token.value = std::move(string);
-  return std::make_optional(std::move(token));
+  token.value = string.Finish( );
+  return std::make_optional(token);
 }
 
-auto Lexer::TryNarrowIntoChar(std::string_view lower, Token& token) -> bool {
+auto Lexer::TryNarrowIntoChar(const std::string_view lower, Token& token) -> bool {
   if (lower.size( ) > 1)
     return false;
   token.kind = Char;
@@ -342,11 +356,11 @@ auto Lexer::TryNarrowIntoChar(std::string_view lower, Token& token) -> bool {
   return true;
 }
 
-auto Lexer::AddToken(Token&& token) -> bool {
+auto Lexer::AddToken(const Token& token) -> bool {
   const auto kind = token.kind;
   if (kind == Skip)
     return true;
-  tokens_.emplace_back(std::move(token));
+  tokens_.emplace_back(token);
   /// A returned `Invalid` acts as a sentinel for badly lexed tokens.
   return kind != Invalid;
 }
@@ -396,15 +410,15 @@ auto Lexer::TryConsumeBaseSpecifier(const usize index, NumberLiteralBase& base,
     return 0;
   }
 
-  const auto& base_specifier = tokens_.at(index + 1).value_as<std::string>( );
-  if (base_specifier.size( ) > 1) {
+  const auto& base_specifier = tokens_.at(index + 1).value_as<const char*>( );
+  if (*(base_specifier + 1) != '\0') {
     auto snippet = detail::BuildSnippet(source_, path_, tokens_.at(index + 1).span);
     diag.AddMessage(Diagnostics::Severity::Error, snippet,
       "Invalid base specifier '{}'.", base_specifier);
     return std::nullopt;
   }
 
-  switch (base_specifier.at(0)) {
+  switch (*base_specifier) {
     case 'd': base = NumberLiteralBase::Decimal; break;
     case 'b': base = NumberLiteralBase::Binary; break;
     default: {
@@ -421,11 +435,11 @@ auto Lexer::TryConsumeBaseSpecifier(const usize index, NumberLiteralBase& base,
 }
 
 auto Lexer::ResolveNumberToken(Token& token, const NumberLiteralBase base,
-  Diagnostics& diag) -> bool {
+  Diagnostics& diag) const -> bool {
   /// Copy the text out before we overwrite `token.value` with the parsed result;
   /// the string and the `u32` share the same variant storage.
   const SourceSpan span = token.span;
-  const std::string text = token.value_as<std::string>( );
+  const auto text = token.value_as<const char*>( );
   const auto parsed = detail::StringToNumber(text, base, source_, path_, span, diag);
   if (!parsed) {
     auto snippet = detail::BuildSnippet(source_, path_, span);
@@ -533,7 +547,7 @@ auto Lexer::Tokenize(const std::string_view source, Diagnostics& diag) -> bool {
     for (const auto& fn : MATCH_FN) {
       if (auto token = fn(ctx); token.has_value( )) {
         token->span = ctx.SpanFromSaved( );
-        found = AddToken(std::move(*token));
+        found = AddToken(*token);
         break;
       }
       ctx.Restore( );
