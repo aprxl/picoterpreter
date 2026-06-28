@@ -110,7 +110,7 @@ namespace pico::detail
   }
 
   class StringPool {
-    static constexpr usize CHUNK_SIZE = 64_usize * 1024;
+    static constexpr usize CHUNK_SIZE = 16_usize * 1024;
   public:
     StringPool( ) = default;
 

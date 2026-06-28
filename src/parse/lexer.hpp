@@ -112,7 +112,6 @@ static constexpr auto WHITESPACE = [] consteval {
 
 class Lexer {
   using BufferIterator = std::string_view::iterator;
-
 public:
   enum TokenKind : u8;
   enum class InstructionKind : u8;
@@ -122,6 +121,7 @@ public:
   struct Symbol;
   struct Token;
   class Context;
+  using TokenValue = std::variant<u32, InstructionKind, FlagKind, const char*>;
 
   Lexer() = default;
 
@@ -296,7 +296,7 @@ struct Lexer::Symbol {
 struct Lexer::Token {
   TokenKind kind = Invalid;
   SourceSpan span{ };
-  std::variant<u32, InstructionKind, FlagKind, const char*> value;
+  TokenValue value;
 
   template <typename T>
   T& value_as( ) { return std::get<T>(value); }

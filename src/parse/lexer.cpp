@@ -111,7 +111,7 @@ auto StringToNumber(const std::string_view str, const Lexer::NumberLiteralBase b
 /// Widest raw literal we accept before resolution (binary numbers can have 8 digits);
 /// per-base digit limits are enforced later in `detail::StringToNumber`.
 constexpr u8 NUMBER_MAX_DIGITS = 8_u8;
-constexpr usize STRING_MIN_CAPACITY = 8_usize;
+constexpr u8 STRING_MIN_CAPACITY = 8_u8;
 
 auto Lexer::TryIdentifier(Context& ctx) -> std::optional<Token> {
   Token token{ };
